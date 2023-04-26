@@ -1,6 +1,6 @@
 """This is the slimmed ResNet as used by Lopez et al. in the GEM paper."""
 import torch.nn as nn
-from torch.nn.functional import relu, avg_pool2d
+from torch.nn.functional import avg_pool2d, relu
 
 
 def conv3x3(in_planes, out_planes, stride=1):
@@ -46,7 +46,7 @@ class BasicBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes, nf):
+    def __init__(self, block, num_blocks, num_classes, nf, ne):
         super(ResNet, self).__init__()
         self.in_planes = nf
 
@@ -66,7 +66,7 @@ class ResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward_features(self, x):
         bsz = x.size(0)
         out = relu(self.bn1(self.conv1(x.view(bsz, 3, 32, 32))))
         out = self.layer1(out)
@@ -75,13 +75,20 @@ class ResNet(nn.Module):
         out = self.layer4(out)
         out = avg_pool2d(out, 4)
         out = out.view(out.size(0), -1)
-        out = self.linear(out)
+        return out
+
+    def forward_head(self, x):
+        return self.linear(x)
+
+    def forward(self, x):
+        out = self.forward_features(x)
+        out = self.forward_head(out)
         return out
 
 
-def SlimResNet18(n_classes, nf=20):
+def SlimResNet18(n_classes, nf=20, ne=50):
     """Slimmed ResNet18."""
-    return ResNet(BasicBlock, [2, 2, 2, 2], n_classes, nf)
+    return ResNet(BasicBlock, [2, 2, 2, 2], n_classes, nf, ne)
 
 
 __all__ = ["SlimResNet18"]

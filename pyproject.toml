@@ -1,0 +1,59 @@
+[tool.poetry]
+name = "clvis-chlg"
+version = "0.1.0"
+description = ""
+authors = ["Xiaotian Duan <xduan7@gmail.com>"]
+readme = "README.md"
+packages = [{include = "clvis_chlg"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pytorchcv = "^0.0.67"
+psutil = "^5.9.4"
+gputil = "^1.4.0"
+wandb = "^0.14.0"
+tensorboard = "^2.12.0"
+scikit-learn = "^1.2.2"
+matplotlib = "^3.7.1"
+numpy = "^1.24.2"
+quadprog = "^0.1.11"
+tqdm = "^4.65.0"
+pycocotools = "^2.0.6"
+torchmetrics = "^0.11.4"
+gdown = "^4.7.1"
+ctrl-benchmark = "^0.0.4"
+gym = "^0.26.2"
+higher = "^0.2.1"
+lvis = "^0.5.3"
+dill = "^0.3.6"
+seaborn = "^0.12.2"
+torch = "^1.10.0"
+torchvision = "^0.11.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+[tool.black]
+line-length = 79
+kip-string-normalization = true
+target-version = ["py39"]
+
+[tool.isort]
+profile = "black"
+line_length = 79
+
+[tool.flake8]
+ignore = ["E203"]
+max-line-length = 79
+
+[tool.mypy]
+python_version = 3.9
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "torch.*"
+follow_imports = "skip"
+follow_imports_for_stubs = true

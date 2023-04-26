@@ -22,3 +22,17 @@ The biggest problem with this approach is that the number of classes is too much
 
 To implement this, we have to modify the dataloader so that the batched images share the same class IDs (positive & negative). This is because the hard attention modules cannot accept different indices in a single forward/backward pass. 
 
+
+## Training
+
+It takes roughly 40 minutes for 5 epochs of representation learning and 5 epochs of classification learning. However, inference time is not monitored and restricted.
+
+
+# TODO:
+
+Rotated head
+Training augmentation exploration
+Test augmentation
+Label smoothing?
+Better heuristics for SupCon loss during rotation (making the similarity matrix values more than binary)
+Hyperparameter tuning

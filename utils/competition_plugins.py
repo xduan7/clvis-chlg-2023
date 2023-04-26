@@ -1,6 +1,7 @@
+import time
+
 import psutil
 import torch
-import time
 
 from avalanche.training.plugins.strategy_plugin import SupervisedPlugin
 from avalanche.training.templates import SupervisedTemplate
@@ -8,8 +9,10 @@ from avalanche.training.templates import SupervisedTemplate
 
 class MaxGPUAllocationExceeded(Exception):
     def __init__(self, allocated, max_allowed):
-        message = f"GPU memory allocation ({allocated} MB) exceeded the " \
-                  f"maximum allowed amount which is {max_allowed} MB."
+        message = (
+            f"GPU memory allocation ({allocated} MB) exceeded the "
+            f"maximum allowed amount which is {max_allowed} MB."
+        )
         super(MaxGPUAllocationExceeded, self).__init__(message)
 
 
@@ -18,9 +21,11 @@ class GPUMemoryChecker(SupervisedPlugin):
     This plugin checks the maximum amount of GPU memory allocated after each
     experience.
     """
-    def __init__(self,
-                 max_allowed: int = 5000,
-                 device: torch.DeviceObjType = torch.device("cuda:0")
+
+    def __init__(
+        self,
+        max_allowed: int = 5000,
+        device: torch.DeviceObjType = torch.device("cuda:0"),
     ):
         """
 
@@ -33,7 +38,9 @@ class GPUMemoryChecker(SupervisedPlugin):
         self.gpu_allocated = 0
         self.device = device
 
-    def after_training_exp(self, strategy: SupervisedTemplate, *args, **kwargs):
+    def after_training_exp(
+        self, strategy: SupervisedTemplate, *args, **kwargs
+    ):
         gpu_allocated = torch.cuda.max_memory_allocated(device=self.device)
         gpu_allocated = gpu_allocated // 1000000
         self.gpu_allocated = gpu_allocated
@@ -45,8 +52,10 @@ class GPUMemoryChecker(SupervisedPlugin):
 
 class MaxRAMAllocationExceeded(Exception):
     def __init__(self, allocated, max_allowed):
-        message = f"RAM allocation ({allocated} MB) exceeded the " \
-                  f"maximum allowed amount which is {max_allowed} MB."
+        message = (
+            f"RAM allocation ({allocated} MB) exceeded the "
+            f"maximum allowed amount which is {max_allowed} MB."
+        )
         super(MaxRAMAllocationExceeded, self).__init__(message)
 
 
@@ -54,6 +63,7 @@ class RAMChecker(SupervisedPlugin):
     """
     This plugin checks the maximum amount of RAM used after each experience.
     """
+
     def __init__(self, max_allowed: int = 5000):
         """
         :param max_allowed: Maximum GPU memory allowed in MB.
@@ -63,7 +73,9 @@ class RAMChecker(SupervisedPlugin):
         self.max_allowed = max_allowed
         self.ram_allocated = 0
 
-    def after_training_exp(self, strategy: SupervisedTemplate, *args, **kwargs):
+    def after_training_exp(
+        self, strategy: SupervisedTemplate, *args, **kwargs
+    ):
         ram_allocated = psutil.Process().memory_info().rss
         ram_allocated = ram_allocated // 1000000
         self.ram_allocated = ram_allocated
@@ -75,8 +87,10 @@ class RAMChecker(SupervisedPlugin):
 
 class TimeExceeded(Exception):
     def __init__(self, allocated, max_allowed):
-        message = f"Time ({allocated} minutes) exceeded the " \
-                  f"maximum allowed amount which is {max_allowed} minutes."
+        message = (
+            f"Time ({allocated} minutes) exceeded the "
+            f"maximum allowed amount which is {max_allowed} minutes."
+        )
         super(TimeExceeded, self).__init__(message)
 
 
@@ -84,6 +98,7 @@ class TimeChecker(SupervisedPlugin):
     """
     This plugin checks the amount of time spent after each experience.
     """
+
     def __init__(self, max_allowed: int = 5000):
         """
         :param max_allowed: Maximum amount of time allowed in minutes.
@@ -94,7 +109,9 @@ class TimeChecker(SupervisedPlugin):
         self.start = time.time()
         self.time_spent = 0
 
-    def after_training_exp(self, strategy: SupervisedTemplate, *args, **kwargs):
+    def after_training_exp(
+        self, strategy: SupervisedTemplate, *args, **kwargs
+    ):
         time_spent = time.time() - self.start
         time_spent = time_spent // 60
         self.time_spent = time_spent
