@@ -110,8 +110,7 @@ if __name__ == "__main__":
         hat_config = HATConfig(
             num_tasks=benchmark.n_experiences,
             max_trn_mask_scale=100,
-            # FIXME: change this back to `dense`
-            init_strat="normal",
+            init_strat="dense",
         )
         model = HATSlimResNet18(
             n_classes=benchmark.n_classes,
@@ -189,6 +188,14 @@ if __name__ == "__main__":
 
     # Save predictions or print the results
     if args.benchmark:
+        import dill
+
+        with open("./data/challenge_test_labels.pkl", "rb") as __f:
+            tst_labels = dill.load(__f)
+
+        tst_labels = np.array(tst_labels)
+        print(f"Test-set accuracy: {np.mean(tst_predictions == tst_labels)}")
+
         np.save(f"{args.name}_{args.config}_logits.npy", tst_logits)
         np.save(f"{args.name}_{args.config}_predictions.npy", tst_predictions)
     else:

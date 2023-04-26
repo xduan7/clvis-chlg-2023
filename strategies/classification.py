@@ -94,11 +94,9 @@ class Classification(SupervisedTemplate):
         self.logit_temp = nn.ParameterList([])
 
     # TODO: initialization technique
-    # TODO: logits normalization
     # TODO: rotated head
     # TODO: smooth labels
-    # TODO: calibration (temperature scaling)
-    # TODO: regularization for logits so that they are not too far from 0
+    # TODO: test time augmentation
 
     @staticmethod
     def _get_evaluator(verbose: bool):
@@ -159,7 +157,7 @@ class Classification(SupervisedTemplate):
                 batch_size=self.train_mb_size,
                 shuffle=shuffle,
                 num_workers=num_workers,
-                pin_memory=pin_memory,
+                pin_memory=pin_memory if self.device.type == "cuda" else False,
                 persistent_workers=persistent_workers,
                 collate_fn=_clf_collate_fn,
             )
@@ -168,7 +166,7 @@ class Classification(SupervisedTemplate):
             batch_size=self.train_mb_size,
             shuffle=shuffle,
             num_workers=num_workers,
-            pin_memory=pin_memory,
+            pin_memory=pin_memory if self.device.type == "cuda" else False,
             persistent_workers=persistent_workers,
             collate_fn=_clf_collate_fn,
         )
@@ -345,7 +343,7 @@ class Classification(SupervisedTemplate):
             _tst_dataset,
             batch_size=512,
             num_workers=8,
-            pin_memory=True,
+            pin_memory=True if self.device.type == "cuda" else False,
             shuffle=False,
             persistent_workers=False,
             collate_fn=_clf_collate_fn,
@@ -365,7 +363,7 @@ class Classification(SupervisedTemplate):
 
         _tst_logits = torch.zeros(
             len(_tst_dataset),
-            len(set(_tst_dataset.targets)),
+            len(_cls_to_last_seen_exp),
             device=self.device,
         )
         _tst_logits[:] = torch.nan

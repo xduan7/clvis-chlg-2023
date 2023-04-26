@@ -218,7 +218,7 @@ class SupContrast(SupervisedTemplate):
             batch_size=self.train_mb_size,
             shuffle=shuffle,
             num_workers=num_workers,
-            pin_memory=pin_memory,
+            pin_memory=pin_memory if self.device.type == "cuda" else False,
             persistent_workers=persistent_workers,
             collate_fn=_sup_contrast_collate_fn,
         )
@@ -260,8 +260,7 @@ class SupContrast(SupervisedTemplate):
                 _task_id = self.experience.current_experience
                 _progress = mb_it / (_num_mb - 1)
                 _mask_scale = get_hat_mask_scale(
-                    # FIXME: change this back to `cosine`
-                    strat="linear",
+                    strat="cosine",
                     progress=_progress,
                     max_trn_mask_scale=self.hat_config.max_trn_mask_scale,
                 )
