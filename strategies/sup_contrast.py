@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -17,12 +17,12 @@ from hat.utils import get_hat_mask_scale, get_hat_reg_term, get_hat_util
 # Original SupContrast augmentation
 _aug_tsfm = transforms.Compose(
     [
+        # TODO: the scale might needs a bit of tuning
         transforms.RandomResizedCrop(32, scale=(0.2, 1.0)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply(
             [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8
         ),
-        # TODO: should I add rotation here as well?
         transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
         transforms.Normalize(
@@ -259,6 +259,9 @@ class SupContrast(SupervisedTemplate):
             else:
                 _task_id = self.experience.current_experience
                 _progress = mb_it / (_num_mb - 1)
+
+                # TODO: increase the min_trn_mask_scale
+
                 _mask_scale = get_hat_mask_scale(
                     strat="cosine",
                     progress=_progress,

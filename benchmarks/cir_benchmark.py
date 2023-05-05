@@ -23,6 +23,22 @@ def generate_benchmark(
     # Sample indices for each class
     selected_indices = {}
 
+    # # Get the indices per class of the train set, and stored in another dict
+    # _indices_per_class = {}
+    # for c in range(n_classes):
+    #     _indices_per_class[c] = torch.where(
+    #         torch.LongTensor(train_set.targets) == c
+    #     )[0]
+    #
+    # # Check if these two dicts are the same
+    # for c in range(n_classes):
+    #     assert torch.all(
+    #         torch.eq(
+    #             indices_per_class[c],
+    #             _indices_per_class[c],
+    #         )
+    #     )
+
     def sample_per_class(c):
         selected_indices[c] = {}
         indices_c = indices_per_class[c][

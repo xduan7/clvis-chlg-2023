@@ -113,9 +113,9 @@ class TimeChecker(SupervisedPlugin):
         self, strategy: SupervisedTemplate, *args, **kwargs
     ):
         time_spent = time.time() - self.start
-        time_spent = time_spent // 60
+        time_spent = time_spent / 60
         self.time_spent = time_spent
-        print(f"TIME SPENT: {time_spent} MINUTES")
+        print(f"TIME SPENT: {time_spent:.2f} MINUTES")
 
         if time_spent > self.max_allowed:
             raise TimeExceeded(time_spent, self.max_allowed)

@@ -37,6 +37,9 @@ class BasicBlock(nn.Module):
                 nn.BatchNorm2d(self.expansion * planes),
             )
 
+    def zero_init_last(self):
+        nn.init.zeros_(self.bn2.weight)
+
     def forward(self, x):
         out = relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))

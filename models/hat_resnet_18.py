@@ -65,6 +65,10 @@ class HATBasicBlock(HATPayloadCarrierMixin):
         self.act1 = nn.ReLU()
         self.act2 = nn.ReLU()
 
+    def zero_init_last(self):
+        for __bn in self.bn2:
+            nn.init.zeros_(__bn.weight)
+
     def forward(self, pld: HATPayload) -> HATPayload:
         shortcut = pld.forward_by(self.shortcut)
 
