@@ -1,0 +1,33 @@
+###############################################################################
+#
+# Configuration for Microsoft NNI
+# Reference: https://nni.readthedocs.io/en/latest/Tutorial/ExperimentConfig.html
+#
+# Launch the experiment:
+# - replace the PROF_DIR and ENV_DIR with your own project and environment paths respectively.
+# - configure the experiment (e.g. changing the duration, concurrency, and tuner etc.)
+# - execute the following command: $ nnictl create --config ${PROJ_DIR}/exps/example/config.yaml --debug --port ${PROT_NUM}
+#
+###############################################################################
+
+experimentName: "CLVIS-CHLG (config 1)"
+experimentWorkingDirectory: "/home/duan/projects/clvis-chlg/logs/nni"
+
+maxExperimentDuration: 14d
+maxTrialNumber: 1000
+searchSpaceFile: "search_space.json"
+useAnnotation: false
+
+trialConcurrency: 8
+trialGpuNumber: 1
+trialCodeDirectory: "/home/duan/projects/clvis-chlg"
+trialCommand: PYTHONPATH="/home/duan/projects/clvis-chlg:${PYTHONPATH}"  /home/duan/software/anaconda3/envs/clvis-chlg/bin/python train.py --config 1
+
+tuner:
+  name: Random
+  classArgs:
+    optimize_mode: maximize
+
+trainingService:
+  platform: local
+  useActiveGpu: true

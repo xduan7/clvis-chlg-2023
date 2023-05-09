@@ -36,6 +36,7 @@ def get_cifar_based_benchmark(scenario_config, seed, benchmark):
             n_experiences=1,
             shuffle=True,
             dataset_root="./data/datasets",
+            # Comment out the following two lines for baseline runs
             train_transform=None,
             eval_transform=None,
         )

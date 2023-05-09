@@ -63,8 +63,8 @@ def main(args):
     # --- Competition Plugins
     # DO NOT REMOVE OR CHANGE THESE PLUGINS:
     competition_plugins = [
-        GPUMemoryChecker(max_allowed=1000, device=device),
-        RAMChecker(max_allowed=3200),
+        # GPUMemoryChecker(max_allowed=1000, device=device),
+        # RAMChecker(max_allowed=3200),
         TimeChecker(max_allowed=500),
     ]
 

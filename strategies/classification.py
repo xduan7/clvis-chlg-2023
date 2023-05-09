@@ -1,25 +1,20 @@
-import warnings
+import math
 from typing import List, Optional
 
 import torch
 import torch.nn as nn
 from torch import optim
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import MultiStepLR, StepLR
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from avalanche.core import SupervisedPlugin
-from avalanche.evaluation.metrics import (
-    accuracy_metrics,
-    forgetting_metrics,
-    loss_metrics,
-)
+from avalanche.evaluation.metrics import accuracy_metrics, loss_metrics
 from avalanche.logging import InteractiveLogger
-from avalanche.training.plugins import EvaluationPlugin, LRSchedulerPlugin
-from avalanche.training.templates import SupervisedTemplate
+from avalanche.training.plugins import EvaluationPlugin
 from hat import HATPayload
-from hat.utils import get_hat_mask_scale, get_hat_reg_term, get_hat_util
+
+from .base import BaseStrategy
 
 # Validation set size (for temperature scaling)
 val_ratio = 0.1
@@ -80,19 +75,19 @@ def _k_means(
     return features[_nearest_indices]
 
 
-class Classification(SupervisedTemplate):
+class Classification(BaseStrategy):
     def __init__(
         self,
         model: nn.Module,
         optimizer: Optimizer,
         train_mb_size: int,
         train_epochs: int,
+        hat_reg_base_factor: float,
+        num_replay_samples_per_batch: int,
         device: torch.device,
         freeze_backbone: bool,
         train_exp_logits_only: bool,
         logit_calibr: str,  # One of "none", "temp", or "norm"
-        replay: bool,
-        lr_decay: bool,
         plugins: Optional[List[SupervisedPlugin]] = None,
         verbose: bool = True,
     ):
@@ -101,37 +96,19 @@ class Classification(SupervisedTemplate):
             optimizer=optimizer,
             train_mb_size=train_mb_size,
             train_epochs=train_epochs,
-            criterion=nn.CrossEntropyLoss(),
+            hat_reg_base_factor=hat_reg_base_factor,
+            num_replay_samples_per_batch=num_replay_samples_per_batch,
             device=device,
             plugins=plugins,
-            evaluator=self._get_evaluator(verbose),
+            verbose=verbose,
         )
         self.freeze_backbone = freeze_backbone
         self.train_exp_logits_only = train_exp_logits_only
         self.logit_calibr = logit_calibr
-        self.hat_config = getattr(self.model, "hat_config", None)
-        self.replay = replay
-        self.lr_decay = lr_decay
-        self.verbose = verbose
-
-        if self.lr_decay:
-            self.scheduler_kwargs = {
-                "step_size": 10,
-                "gamma": 0.1,
-            }
-            self.lr_scheduler_plugin = LRSchedulerPlugin(
-                StepLR(self.optimizer, **self.scheduler_kwargs),
-            )
-            self.plugins.append(self.lr_scheduler_plugin)
 
         self.classes_in_experiences = []
         self.logit_norm = []
         self.logit_temp = nn.ParameterList([])
-        self.replay_features = {}
-        self.replay_feature_tensor = None
-        self.replay_target_tensor = None
-        self.num_replay_samples_per_class = 2
-        self.num_replay_samples_per_batch = 2
 
         self.classes_trained_in_this_experience = None
         self.num_classes_trained_in_this_experience = None
@@ -139,7 +116,11 @@ class Classification(SupervisedTemplate):
     # TODO: different learning rates for backbone and head
     # TODO: rotated head
     # TODO: smooth labels
-    # TODO: add weights to loss function if replay
+    # TODO: add weights to loss function if replay?
+
+    @staticmethod
+    def _get_criterion():
+        return nn.CrossEntropyLoss()
 
     @staticmethod
     def _get_evaluator(verbose: bool):
@@ -150,16 +131,8 @@ class Classification(SupervisedTemplate):
             loss_metrics(
                 minibatch=False, epoch=True, experience=True, stream=True
             ),
-            forgetting_metrics(experience=True),
+            # forgetting_metrics(experience=True),
             loggers=[InteractiveLogger()] if verbose else None,
-        )
-
-    def _unpack_minibatch(self):
-        self._check_minibatch()
-        self.mbatch = (
-            self.mbatch[0].to(self.device),
-            self.mbatch[1].to(self.device),
-            self.mbatch[2],
         )
 
     def train_dataset_adaptation(self, **kwargs):
@@ -230,7 +203,8 @@ class Classification(SupervisedTemplate):
                 self.experience.classes_in_this_experience + [100]
             )
             # Reset the last neuron of the classifier head
-            self.model.linear.weight.data[-1, :] = 0
+            __bound = 1 / math.sqrt(_model.linear.weight.size(1))
+            self.model.linear.weight.data[-1, :].uniform_(-__bound, __bound)
             self.model.linear.bias.data[-1] = 0
         elif self.train_exp_logits_only:
             self.classes_trained_in_this_experience = (
@@ -248,51 +222,24 @@ class Classification(SupervisedTemplate):
                 nn.BatchNorm1d(
                     self.num_classes_trained_in_this_experience,
                     affine=False,
-                ).to(self.device)
+                ).to(self.device, non_blocking=True)
             )
         elif self.logit_calibr == "temp":
             self.logit_temp.append(
                 nn.Parameter(
                     torch.ones(self.num_classes_trained_in_this_experience),
                     requires_grad=True,
-                ).to(self.device)
+                ).to(self.device, non_blocking=True)
             )
 
-        if self.replay:
-            for __c in self.experience.classes_in_this_experience:
-                if __c in self.replay_features:
-                    del self.replay_features[__c]
-            if len(self.replay_features) > 0:
-                __logits, __y = [], []
-                for __c, __l in self.replay_features.items():
-                    # Shape of the logits are [num_samples, num_features]
-                    __logits.append(__l)
-                    if self.train_exp_logits_only:
-                        __y += [
-                            self.num_classes_trained_in_this_experience - 1
-                        ] * len(__l)
-                    else:
-                        __y += [__c] * len(__l)
-                self.replay_feature_tensor = torch.cat(__logits, dim=0)
-                self.replay_target_tensor = torch.tensor(
-                    __y, device=self.device
-                )
-
+        self._del_replay_features(self.experience.classes_in_this_experience)
+        if self.train_exp_logits_only:
+            self._construct_replay_tensors(
+                target=self.num_classes_trained_in_this_experience - 1
+            )
+        else:
+            self._construct_replay_tensors()
         return _model
-
-    def make_optimizer(self):
-        # Recreate an optimizer with the new parameters to
-        # (1) prevent momentum/gradient carry-over
-        # (2) train on the new projection head
-        self.optimizer = self.optimizer.__class__(
-            self.model.parameters(),
-            **self.optimizer.defaults,
-        )
-        if self.lr_decay:
-            self.lr_scheduler_plugin.scheduler = StepLR(
-                self.optimizer,
-                **self.scheduler_kwargs,
-            )
 
     def training_epoch(self, **kwargs):
         _num_mb = len(self.dataloader)
@@ -301,36 +248,20 @@ class Classification(SupervisedTemplate):
                 break
 
             self._unpack_minibatch()
-            self._before_training_iteration(**kwargs)
+            # self._before_training_iteration(**kwargs)
 
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
             self.loss = 0
 
             # Forward
             self._before_forward(**kwargs)
-            if self.hat_config is None:
-                _features = self.model.forward_features(self.mb_x)
-            else:
-                _task_id = self.experience.current_experience
-                _progress = mb_it / (_num_mb - 1)
-                _mask_scale = (
-                    get_hat_mask_scale(
-                        strat="cosine",
-                        progress=_progress,
-                        max_trn_mask_scale=self.hat_config.max_trn_mask_scale,
-                    )
-                    if not self.freeze_backbone
-                    else self.hat_config.max_trn_mask_scale
-                )
-                _pld = HATPayload(
-                    data=self.mb_x,
-                    task_id=_task_id,
-                    mask_scale=_mask_scale,
-                )
-                _features = self.model.forward_features(_pld)
-
-            # TODO: insert logits from other classes here ... ?
-            self.mb_output = self.model.forward_head(_features)[
+            _logits = _features = self.forward_(
+                model=self.model,
+                images=self.mb_x,
+                mb_it=mb_it,
+                return_features=False,
+            )
+            self.mb_output = _logits[
                 :, self.classes_trained_in_this_experience
             ]
             if self.logit_calibr == "norm":
@@ -339,25 +270,12 @@ class Classification(SupervisedTemplate):
                 ](self.mb_output)
 
             # Add replay samples here ..
-            if (
-                self.replay
-                and self.replay_feature_tensor is not None
-                # and (len(self.experience.classes_in_this_experience) <= 2)
-            ):
-                # TODO: Not sure how many replay samples to use here ...
-                # Add the replay samples by forwarding the saved logits
-                # Modify self.mb_output and self.mb_y accordingly
-                __indices = torch.randperm(
-                    self.replay_feature_tensor.shape[0]
-                )[: self.num_replay_samples_per_batch]
-                __replay_logits = self.model.forward_head(
-                    self.replay_feature_tensor[__indices]
-                )[:, self.classes_trained_in_this_experience]
-                # Add random noise to the logits
-                # __replay_logits = __replay_logits + torch.randn_like(
-                #     __replay_logits
-                # ) * 0.1
-                __replay_targets = self.replay_target_tensor[__indices]
+            # TODO: Not sure how many replay samples to use here ...
+            __replay_features, __replay_targets = self._get_replay_samples()
+            if __replay_features is not None and __replay_targets is not None:
+                __replay_logits = self.model.forward_head(__replay_features)[
+                    :, self.classes_trained_in_this_experience
+                ]
                 self.mb_output = torch.cat(
                     [self.mb_output, __replay_logits], dim=0
                 )
@@ -366,18 +284,11 @@ class Classification(SupervisedTemplate):
                     torch.cat([self.mb_y, __replay_targets], dim=0),
                     self.mbatch[2],
                 )
+
             self._after_forward(**kwargs)
 
             # Loss & Backward
-            self.loss += self.criterion()
-            if self.hat_config is not None and not self.freeze_backbone:
-                # noinspection PyUnboundLocalVariable
-                self.loss = self.loss + get_hat_reg_term(
-                    module=self.model,
-                    strat="uniform",
-                    task_id=_task_id,
-                    mask_scale=_mask_scale,
-                )
+            self.loss = self.criterion()
             self._before_backward(**kwargs)
             self.backward()
             self._after_backward(**kwargs)
@@ -432,63 +343,7 @@ class Classification(SupervisedTemplate):
 
             _optim.step(_eval_temperature)
 
-        if self.replay:
-            self.model.eval()
-
-            # No augmentation for replay samples
-            _dataset = self.adapted_dataset.replace_current_transform_group(
-                (_tsfm, None)
-            )
-            _dataloader = DataLoader(
-                _dataset,
-                batch_size=self.train_mb_size * 2,
-                shuffle=False,
-                num_workers=8,
-                pin_memory=(self.device.type == "cuda"),
-                persistent_workers=False,
-                collate_fn=_clf_collate_fn,
-            )
-            _features, _targets = [], []
-            with torch.no_grad():
-                for __images, __targets, _ in _dataloader:
-                    __images = __images.to(device=self.device)
-                    __targets = __targets.to(device=self.device)
-
-                    if self.hat_config is None:
-                        __features = self.model.forward_features(__images)
-                    else:
-                        _pld = HATPayload(
-                            data=__images,
-                            task_id=self.experience.current_experience,
-                            mask_scale=self.hat_config.max_trn_mask_scale,
-                        )
-                        __features = self.model.forward_features(_pld)
-
-                    _features.append(__features)
-                    _targets.append(__targets)
-
-            # Select two representative samples per class
-            _features = torch.cat(_features).detach()
-            _targets = torch.cat(_targets).detach()
-
-            # _class_feature_means = []
-            for __c in self.experience.classes_in_this_experience:
-                __class_features = _features[_targets == __c]
-
-                # Use K means to find representative samples
-                self.replay_features[__c] = _k_means(
-                    __class_features,
-                    num_clusters=self.num_replay_samples_per_class,
-                )
-
-                # Select the closest samples to the class mean
-                # __class_feature_mean = __class_features.mean(dim=0)
-                # __distances = torch.norm(
-                #     __class_features - __class_feature_mean, dim=1
-                # )
-                # __distances, __indices = torch.sort(__distances)
-                # __indices = __indices[:self.num_replay_samples_per_class]
-                # self.logit_replay[__c] = _features[__indices]
+        self._collect_replay_samples()
 
         # Unfreeze the model if needed
         if self.freeze_backbone:
@@ -497,14 +352,52 @@ class Classification(SupervisedTemplate):
                     __p.requires_grad = True
                 except RuntimeError:
                     pass
-        else:
-            # Report the HAT mask usage
-            if self.hat_config is not None and self.verbose:
-                _mask_util_df = get_hat_util(module=self.model)
-                print(_mask_util_df)
 
-        # Call the plugin functions if there is any
         super()._after_training_exp(**kwargs)
+
+    def _collect_replay_samples(self):
+        self.model.eval()
+        # No augmentation for replay samples
+        _dataset = self.adapted_dataset.replace_current_transform_group(
+            (_tsfm, None)
+        )
+        _dataloader = DataLoader(
+            _dataset,
+            batch_size=self.train_mb_size * 2,
+            shuffle=False,
+            num_workers=8,
+            pin_memory=(self.device.type == "cuda"),
+            persistent_workers=False,
+            collate_fn=_clf_collate_fn,
+        )
+
+        _features, _targets = [], []
+        with torch.no_grad():
+            for __images, __targets, _ in _dataloader:
+                __images = __images.to(device=self.device, non_blocking=True)
+                __targets = __targets.to(device=self.device, non_blocking=True)
+                __features = self.forward_(
+                    model=self.model,
+                    images=__images,
+                    return_features=True,
+                    mask_scale=self.hat_config.max_trn_mask_scale,
+                )
+                _features.append(__features)
+                _targets.append(__targets)
+
+        # Select two representative samples per class
+        _features = torch.cat(_features).detach()
+        _targets = torch.cat(_targets).detach()
+
+        # _class_feature_means = []
+        for __c in self.experience.classes_in_this_experience:
+            __class_features = _features[_targets == __c]
+
+            # Use K means to find representative samples
+            self.replay_features[__c] = _k_means(
+                __class_features,
+                num_clusters=self.num_replay_samples_per_class,
+            )
 
     @torch.no_grad()
     def predict_by_all_exp(
@@ -580,7 +473,6 @@ class Classification(SupervisedTemplate):
                 ) in _last_seen_exp_to_cls.items():
                     if self.hat_config is None:
                         __features = self.model.forward_features(__images)
-                        __logits = self.model.forward_head(__features)
                     else:
                         __pld = HATPayload(
                             data=__images,
@@ -588,7 +480,7 @@ class Classification(SupervisedTemplate):
                             mask_scale=self.hat_config.max_trn_mask_scale,
                         )
                         __features = self.model.forward_features(__pld)
-                        __logits = self.model.forward_head(__features)
+                    __logits = self.model.forward_head(__features)
                     if self.logit_calibr == "norm":
                         __logits = __logits[:, __classes_in_exp]
                         __logits = self.logit_norm[__exp_id](__logits)
@@ -702,7 +594,6 @@ class Classification(SupervisedTemplate):
 
                 if self.hat_config is None:
                     __features = self.model.forward_features(__images)
-                    __logits = self.model.forward_head(__features)
                 else:
                     __pld = HATPayload(
                         data=__images,
@@ -710,7 +601,7 @@ class Classification(SupervisedTemplate):
                         mask_scale=self.hat_config.max_trn_mask_scale,
                     )
                     __features = self.model.forward_features(__pld)
-                    __logits = self.model.forward_head(__features)
+                __logits = self.model.forward_head(__features)
 
                 if self.logit_calibr == "norm":
                     __logits = __logits[:, self.classes_in_experiences[-1]]

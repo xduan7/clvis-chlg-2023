@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -10,14 +10,12 @@ from avalanche.core import SupervisedPlugin
 from avalanche.evaluation.metrics import loss_metrics
 from avalanche.logging import InteractiveLogger
 from avalanche.training.plugins import EvaluationPlugin
-from avalanche.training.templates import SupervisedTemplate
-from hat import HATPayload
-from hat.utils import get_hat_mask_scale, get_hat_reg_term, get_hat_util
+
+from .base import BaseStrategy
 
 # Original SupContrast augmentation
 _aug_tsfm = transforms.Compose(
     [
-        # TODO: the scale might needs a bit of tuning
         transforms.RandomResizedCrop(32, scale=(0.2, 1.0)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply(
@@ -69,54 +67,35 @@ class SupContrastLoss(nn.Module):
                 "Illegal temperature: abs({}) < 1e-8".format(self.temperature)
             )
 
-    def forward(self, features, labels=None, mask=None):
+    @torch.compile
+    def forward(self, features, labels):
         """Compute loss for model. If both `labels` and `mask` are None,
         it degenerates to SimCLR unsupervised loss:
         https://arxiv.org/pdf/2002.05709.pdf
+
         Args:
             features: hidden vector of shape [bsz, n_views, ...].
             labels: ground truth of shape [bsz].
-            mask: contrastive mask of shape [bsz, bsz], mask_{i,j}=1 if
-                sample j has the same class as sample i. Can be asymmetric.
+
         Returns:
             A loss scalar.
+
         """
-        if len(features.shape) < 3:
-            raise ValueError(
-                "`features` needs to be [bsz, n_views, ...],"
-                "at least 3 dimensions are required"
-            )
-        if len(features.shape) > 3:
-            features = features.view(features.shape[0], features.shape[1], -1)
         device = features.device
         batch_size = features.shape[0]
-        if labels is not None and mask is not None:
-            raise ValueError("Cannot define both `labels` and `mask`")
-        elif labels is None and mask is None:
-            mask = torch.eye(batch_size, dtype=torch.float32).to(device)
-        elif labels is not None and mask is None:
-            labels = labels.contiguous().view(-1, 1)
-            if labels.shape[0] != batch_size:
-                raise ValueError(
-                    "Num of labels does not match num of features"
-                )
-            mask = torch.eq(labels, labels.T).float().to(device)
-        elif labels is None and mask is not None:
-            mask = mask.float().to(device)
+        # elif labels is not None and mask is None:
+        labels = labels.contiguous().view(-1, 1)
+        if labels.shape[0] != batch_size:
+            raise ValueError("Num of labels does not match num of features")
+        mask = torch.eq(labels, labels.T).float()
 
         # Features must be normalized similar to `NTXentLoss`
         features = nn.functional.normalize(features, dim=-1, eps=self.eps)
-
         contrast_count = features.shape[1]
         contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
-        if self.contrast_mode == "one":
-            anchor_feature = features[:, 0]
-            anchor_count = 1
-        elif self.contrast_mode == "all":
-            anchor_feature = contrast_feature
-            anchor_count = contrast_count
-        else:
-            raise ValueError("Unknown mode: {}".format(self.contrast_mode))
+        # elif self.contrast_mode == "all":
+        anchor_feature = contrast_feature
+        anchor_count = contrast_count
 
         # compute logits
         anchor_dot_contrast = torch.div(
@@ -132,7 +111,7 @@ class SupContrastLoss(nn.Module):
         logits_mask = torch.scatter(
             torch.ones_like(mask),
             1,
-            torch.arange(batch_size * anchor_count).view(-1, 1).to(device),
+            torch.arange(batch_size * anchor_count, device=device).view(-1, 1),
             0,
         )
         mask = mask * logits_mask
@@ -153,13 +132,15 @@ class SupContrastLoss(nn.Module):
         return loss
 
 
-class SupContrast(SupervisedTemplate):
+class SupContrast(BaseStrategy):
     def __init__(
         self,
         model: nn.Module,
         optimizer: Optimizer,
         train_mb_size: int,
         train_epochs: int,
+        hat_reg_base_factor: float,
+        num_replay_samples_per_batch: int,
         device: torch.device,
         proj_head_dim: int,
         plugins: Optional[List[SupervisedPlugin]] = None,
@@ -170,33 +151,27 @@ class SupContrast(SupervisedTemplate):
             optimizer=optimizer,
             train_mb_size=train_mb_size,
             train_epochs=train_epochs,
-            criterion=SupContrastLoss(),
+            hat_reg_base_factor=hat_reg_base_factor,
+            num_replay_samples_per_batch=num_replay_samples_per_batch,
             device=device,
             plugins=plugins,
-            evaluator=self._get_evaluator(verbose),
+            verbose=verbose,
         )
         self.proj_head_dim = proj_head_dim
-        self.hat_config = getattr(model, "hat_config", None)
-        self.verbose = verbose
 
     # TODO: rotated head
+
+    @staticmethod
+    def _get_criterion():
+        return SupContrastLoss()
 
     @staticmethod
     def _get_evaluator(verbose: bool):
         return EvaluationPlugin(
             loss_metrics(
-                minibatch=True, epoch=True, experience=True, stream=True
+                minibatch=False, epoch=True, experience=True, stream=True
             ),
             loggers=[InteractiveLogger()] if verbose else None,
-        )
-
-    def _unpack_minibatch(self):
-        self._check_minibatch()
-        self.mbatch = (
-            self.mbatch[0].to(self.device),
-            self.mbatch[1].to(self.device),
-            # Task IDs are integers, not tensors
-            self.mbatch[2],
         )
 
     def train_dataset_adaptation(self, **kwargs):
@@ -224,20 +199,15 @@ class SupContrast(SupervisedTemplate):
         )
 
     def model_adaptation(self, model=None):
+        self._del_replay_features(self.experience.classes_in_this_experience)
+        self._construct_replay_tensors()
+
         _base_model = super().model_adaptation(model=model)
         _proj_head = nn.Linear(160, self.proj_head_dim).to(self.device)
         _base_model = self.model
+
         return nn.ModuleDict(
             {"base_model": _base_model, "proj_head": _proj_head}
-        )
-
-    def make_optimizer(self):
-        # Recreate an optimizer with the new parameters to
-        # (1) prevent momentum/gradient carry-over
-        # (2) train on the new projection head
-        self.optimizer = self.optimizer.__class__(
-            self.model.parameters(),
-            **self.optimizer.defaults,
         )
 
     def training_epoch(self, **kwargs):
@@ -249,30 +219,29 @@ class SupContrast(SupervisedTemplate):
             self._unpack_minibatch()
             self._before_training_iteration(**kwargs)
 
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
             self.loss = 0
 
             # Forward
             self._before_forward(**kwargs)
-            if self.hat_config is None:
-                _features = self.model.base_model.forward_features(self.mb_x)
-            else:
-                _task_id = self.experience.current_experience
-                _progress = mb_it / (_num_mb - 1)
-
-                # TODO: increase the min_trn_mask_scale
-
-                _mask_scale = get_hat_mask_scale(
-                    strat="cosine",
-                    progress=_progress,
-                    max_trn_mask_scale=self.hat_config.max_trn_mask_scale,
+            _features = self.forward_(
+                model=self.model.base_model,
+                images=self.mb_x,
+                mb_it=mb_it,
+                return_features=True,
+            )
+            __replay_features, __replay_targets = self._get_replay_samples()
+            if __replay_features is not None:
+                # Need to replicate the features for contrastive learning
+                __replay_features = __replay_features.repeat(1, 2).reshape(
+                    -1, __replay_features.shape[1]
                 )
-                _pld = HATPayload(
-                    data=self.mb_x,
-                    task_id=_task_id,
-                    mask_scale=_mask_scale,
+                _features = torch.cat([_features, __replay_features], dim=0)
+                self.mbatch = (
+                    self.mbatch[0],
+                    torch.cat([self.mb_y, __replay_targets], dim=0),
+                    self.mbatch[2],
                 )
-                _features = self.model.base_model.forward_features(_pld)
             _proj = self.model.proj_head(_features)
             # Reshape from [2*bsz, proj_head_dim] to [bsz, 2, proj_head_dim]
             _proj = _proj.view(2, len(self.mb_y), -1).swapaxes(0, 1)
@@ -280,18 +249,7 @@ class SupContrast(SupervisedTemplate):
             self._after_forward(**kwargs)
 
             # Loss & Backward
-            # `self.criterion` is a `SupContrastLoss` instance, and the
-            # input are `self.mb_output` and `self.mb_y`
             self.loss = self.criterion()
-            if self.hat_config is not None:
-                # noinspection PyUnboundLocalVariable
-                _reg_term = get_hat_reg_term(
-                    module=self.model.base_model,
-                    strat="uniform",
-                    task_id=_task_id,
-                    mask_scale=_mask_scale,
-                )
-                self.loss = self.loss + _reg_term
             self._before_backward(**kwargs)
             self.backward()
             self._after_backward(**kwargs)
@@ -315,7 +273,3 @@ class SupContrast(SupervisedTemplate):
         if isinstance(self.model, nn.ModuleDict):
             del self.model["proj_head"]
             self.model = self.model["base_model"]
-        # Report the HAT mask usage
-        if self.hat_config is not None and self.verbose:
-            _mask_util_df = get_hat_util(module=self.model)
-            print(_mask_util_df)
