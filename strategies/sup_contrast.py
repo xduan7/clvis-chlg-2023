@@ -140,6 +140,8 @@ class SupContrast(BaseStrategy):
         train_mb_size: int,
         train_epochs: int,
         hat_reg_base_factor: float,
+        hat_reg_decay_exp: float,
+        hat_reg_enrich_ratio: float,
         num_replay_samples_per_batch: int,
         device: torch.device,
         proj_head_dim: int,
@@ -151,7 +153,10 @@ class SupContrast(BaseStrategy):
             optimizer=optimizer,
             train_mb_size=train_mb_size,
             train_epochs=train_epochs,
+            freeze_hat=False,
             hat_reg_base_factor=hat_reg_base_factor,
+            hat_reg_decay_exp=hat_reg_decay_exp,
+            hat_reg_enrich_ratio=hat_reg_enrich_ratio,
             num_replay_samples_per_batch=num_replay_samples_per_batch,
             device=device,
             plugins=plugins,
@@ -194,9 +199,30 @@ class SupContrast(BaseStrategy):
             shuffle=shuffle,
             num_workers=num_workers,
             pin_memory=pin_memory if self.device.type == "cuda" else False,
+            pin_memory_device=str(self.device),
             persistent_workers=persistent_workers,
             collate_fn=_sup_contrast_collate_fn,
+            # drop_last=True,
         )
+
+    def _construct_replay_tensors(self):
+        # Contrastive learning requires a different set of features
+        # like [sample_1_features, sample_2_features] for each sample
+        # in the minibatch. We need to construct these tensors for
+        # replay.
+        if not self.replay or len(self.replay_features) == 0:
+            return
+
+        __logits, __targets = [], []
+        for __c, __l in self.replay_features.items():
+            assert len(__l) == 2, (
+                "The implementation is based on 2 samples "
+                "for each class for now."
+            )
+            __logits.append(__l)
+            __targets.append(__c)
+        self.replay_feature_tensor = torch.stack(__logits)
+        self.replay_target_tensor = torch.tensor(__targets, device=self.device)
 
     def model_adaptation(self, model=None):
         self._del_replay_features(self.experience.classes_in_this_experience)
@@ -232,10 +258,7 @@ class SupContrast(BaseStrategy):
             )
             __replay_features, __replay_targets = self._get_replay_samples()
             if __replay_features is not None:
-                # Need to replicate the features for contrastive learning
-                __replay_features = __replay_features.repeat(1, 2).reshape(
-                    -1, __replay_features.shape[1]
-                )
+                __replay_features = __replay_features.reshape(-1, 160)
                 _features = torch.cat([_features, __replay_features], dim=0)
                 self.mbatch = (
                     self.mbatch[0],

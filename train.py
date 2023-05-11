@@ -7,6 +7,8 @@ sys.path.insert(0, "avalanche")
 
 #######################################
 
+import os
+import json
 import argparse
 
 import numpy as np
@@ -26,8 +28,8 @@ from models import *
 from strategies.classification import Classification
 from strategies.sup_contrast import SupContrast
 from utils.competition_plugins import GPUMemoryChecker, RAMChecker, TimeChecker
+from utils.get_ckpt_dir_path import get_ckpt_dir_path
 from utils.params import merge_params, print_params
-from utils.lars import LARS
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -80,6 +82,25 @@ if __name__ == "__main__":
         type=float,
         default=100.0,
         help="Gradient compensation factor for the HAT masks.",
+    )
+    parser.add_argument(
+        "--hat_reg_decay_exp",
+        type=float,
+        default=1.0,
+        help="The decay exponent for the HAT regularization term over time. "
+             "1.0 means the decay is linear (experience n has (49-n)/49 "
+             "decay. 0.0 means no decay.",
+    )
+    parser.add_argument(
+        "--hat_reg_enrich_ratio",
+        type=float,
+        default=0.0,
+        help="The enrichment ratio of the HAT regularization term "
+        "depending on the number of classes in a experience. 1.0 means the "
+        "regularization term is increased by (c - 25)% where c is the "
+        "number of classes in the current experience. 0.0 means no "
+        "enrichment.",
+
     )
     parser.add_argument(
         "--rep_num_epochs",
@@ -156,6 +177,11 @@ if __name__ == "__main__":
         "--clf_freeze_backbone",
         action="store_true",
         help="Freeze the backbone during the classification learning phase.",
+    )
+    parser.add_argument(
+        "--clf_freeze_hat",
+        action="store_true",
+        help="Freeze the HAT maskers during the classification learning phase.",
     )
     parser.add_argument(
         "--clf_train_exp_logits_only",
@@ -279,6 +305,8 @@ if __name__ == "__main__":
         train_mb_size=args.rep_batch_size,
         train_epochs=args.rep_num_epochs,
         hat_reg_base_factor=args.rep_hat_reg_base_factor,
+        hat_reg_decay_exp=args.hat_reg_decay_exp,
+        hat_reg_enrich_ratio=args.hat_reg_enrich_ratio,
         num_replay_samples_per_batch=args.rep_num_replay_samples_per_batch,
         device=device,
         proj_head_dim=args.rep_proj_head_dim,
@@ -295,7 +323,10 @@ if __name__ == "__main__":
         freeze_backbone=args.clf_freeze_backbone,
         train_exp_logits_only=args.clf_train_exp_logits_only,
         train_mb_size=args.clf_batch_size,
+        freeze_hat=args.clf_freeze_hat,
         hat_reg_base_factor=args.clf_hat_reg_base_factor,
+        hat_reg_decay_exp=args.hat_reg_decay_exp,
+        hat_reg_enrich_ratio=args.hat_reg_enrich_ratio,
         num_replay_samples_per_batch=args.clf_num_replay_samples_per_batch,
         device=device,
         train_epochs=args.clf_num_epochs,
@@ -305,19 +336,43 @@ if __name__ == "__main__":
     )
 
     # --- Training Loops
-    for __exp in benchmark.train_stream:
-        print(f"Training on experience {__exp.current_experience} ... ")
-        rep.train(
-            experiences=__exp,
-            num_workers=args.num_workers,
-        )
-        clf.train(
-            experiences=__exp,
-            num_workers=args.num_workers,
-        )
-        rep.sync_replay_features(clf)
+    # Check if there is a checkpoint to load
+    ckpt_dir_path = get_ckpt_dir_path(args)
+    if os.path.exists(os.path.join(ckpt_dir_path, "rep.pth")):
+        # rep.model = torch.load(os.path.join(ckpt_dir_path, "rep.pth"))
+        clf.model = torch.load(os.path.join(ckpt_dir_path, "clf_model.pth"))
+        clf.logit_norm = torch.load(os.path.join(ckpt_dir_path, "clf_logit_norm.pth"))
+        clf.logit_temp = torch.load(os.path.join(ckpt_dir_path, "clf_logit_temp.pth"))
 
-    print(f"Training done in {competition_plugins[0].time_spent:.2f} minutes.")
+        # Probably needs to iterate over the train stream so that the clf can
+        # get to know which experiences and classes
+        for __exp in benchmark.train_stream:
+            clf.classes_in_experiences.append(__exp.classes_in_this_experience)
+
+    else:
+        for __exp in benchmark.train_stream:
+            print(f"Training on experience {__exp.current_experience} ... ")
+            rep.train(
+                experiences=__exp,
+                num_workers=args.num_workers,
+            )
+            clf.train(
+                experiences=__exp,
+                num_workers=args.num_workers,
+            )
+            rep.sync_replay_features(clf)
+
+        print(f"Training done in {competition_plugins[0].time_spent:.2f} minutes.")
+
+        # Save the model(s)
+        # torch.save(rep.model, os.path.join(ckpt_dir_path, "rep_model.pth"))
+        torch.save(clf.model, os.path.join(ckpt_dir_path, "clf_model.pth"))
+        torch.save(clf.logit_norm, os.path.join(ckpt_dir_path, "clf_logit_norm.pth"))
+        torch.save(clf.logit_temp, os.path.join(ckpt_dir_path, "clf_logit_temp.pth"))
+
+        # Save a readable copy of the args for reference (with json)
+        with open(os.path.join(ckpt_dir_path, "args.json"), "w") as __f:
+            json.dump(vars(args), __f, indent=4)
 
     # --- Make prediction on test-set samples
     # This is for testing purpose only.
@@ -327,6 +382,8 @@ if __name__ == "__main__":
         tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
             benchmark.test_stream[0].dataset,
             tst_time_aug=__tta,  # Should be `args.tst_time_aug`
+            num_exp=3,
+            remove_extreme_logits=True,
         )
 
         # Save predictions or print the results
@@ -360,7 +417,7 @@ if __name__ == "__main__":
     # Error analysis
     # Evaluate top-5 accuracy based on logits and targets
     top_5_acc = top_k_accuracy_score(
-        y_score=tst_logits.mean(0),
+        y_score=tst_logits,
         y_true=tst_targets,
         k=5,
     )
@@ -554,22 +611,71 @@ if __name__ == "__main__":
 # +----------------------------+-----------------+
 # | rep_hat_reg_base_factor    | acc             |
 # +----------------------------+-----------------+
-# | 0.90                       |                 |  train
+# | 0.90                       | 0.3067/0.3603   |
 # +----------------------------+-----------------+
-# | 0.85                       |                 |  train(1)
+# | 0.85                       | 0.3127/0.3646   |
 # +----------------------------+-----------------+
-# | 0.80                       |                 |  train(2)
+# | 0.80                       | 0.3127/0.3736   |
 # +----------------------------+-----------------+
-# | 0.75                       |                 |  train(3)
+# | 0.75                       | 0.3136/0.3585   |
 # +----------------------------+-----------------+
-# | 0.70                       |                 |  train(4)
+# | 0.70                       | 0.3174/0.3602   |
 # +----------------------------+-----------------+
-# | 0.65                       |                 |  train(5)
+# | 0.65                       | 0.3122/0.3605   |
 # +----------------------------+-----------------+
 
-# TODO: check if the replay for reg is actually working
+# On the topic of number of replay samples per batch in clf
+# Config 3
+# +-------------------------------------+-----------------+
+# | clf_num_replay_samples_per_batch    | acc             |
+# +-------------------------------------+-----------------+
+# | 0                                   | 0.2338/0.2773   |
+# +-------------------------------------+-----------------+
+# | 2                                   | 0.2448/0.2874   |
+# +-------------------------------------+-----------------+
+# | 4                                   | 0.2422/0.2888   |
+# +-------------------------------------+-----------------+
+# | 8                                   | 0.2431/0.2814   |
+# +-------------------------------------+-----------------+
+# | 12                                  | 0.2495/0.2914   |
+# +-------------------------------------+-----------------+
+# | 16                                  | 0.2346/0.2820   |
+# +-------------------------------------+-----------------+
+# | 20                                  | 0.2425/0.2855   |
+# +-------------------------------------+-----------------+
+# | 24                                  | 0.2265/0.2742   |
+# +-------------------------------------+-----------------+
+# | 32                                  | 0.2421/0.2892   |
+# +-------------------------------------+-----------------+
 
-# TODO: make the reg curve a little less aggressive. Right now the masks are
-#  almost fully utilized by task 45. Maybe we should also consider the
-#  number of classes in the task when computing the reg factor.
+# `train` is the rep with replay samples of 8 (working by drastically
+# decreasing the hat reg factor). NOT WORKING.
 
+# On the topic of number of epochs and training time
+# Config 3 with 12 replay samples without enrichment factor.
+# +-----------------+-----------------+
+# | num_epochs      | acc             |
+# +-----------------+-----------------+
+# | 20              | 0.2335/0.2780   | train(1)
+# +-----------------+-----------------+
+# | 25              | 0.2428/0.2942   | train(2)
+# +-----------------+-----------------+
+# | 30              | 0.2436/0.2997   | train(3)
+# +-----------------+-----------------+
+# | 35              | 0.2396/0.2936   | train(4)
+# +-----------------+-----------------+
+# | 40              | 0.2217/0.2792   | train(5)
+# +-----------------+-----------------+
+# | 45              | 0.2290/0.2941   | train(6)
+# +-----------------+-----------------+
+
+# Another thing about more epochs is that, the mask regularization is more
+# potent. I'm not sure how this impacts the performance of the model, but if
+# I have to guess, it's probably not good.
+
+# `train` is the rep default with **0.5 hat reg
+# `train(1) is the rep with 1 hat reg
+# `train(2) is the rep with 1 hat reg with frozen hat during clf
+# `train(3) is the rep with 1 hat reg with drop_last=False
+
+# TODO: different learning rate for clf backbone and clf head
