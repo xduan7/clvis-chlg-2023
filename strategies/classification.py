@@ -17,7 +17,7 @@ from hat import HATPayload
 from .base import BaseStrategy
 
 # Validation set size (for temperature scaling)
-val_ratio = 0.1
+temp_scale_val_ratio = 0.1
 
 # Original SupContrast augmentation without `RandomGrayscale`
 _aug_tsfm = transforms.Compose(
@@ -115,6 +115,7 @@ class Classification(BaseStrategy):
         self.classes_in_experiences = []
         self.logit_norm = nn.ModuleList([])
         self.logit_temp = nn.ParameterList([])
+        self.trn_acc = []
 
         self.classes_trained_in_this_experience = None
         self.num_classes_trained_in_this_experience = None
@@ -168,8 +169,12 @@ class Classification(BaseStrategy):
             __adapted_dataset = self.adapted_dataset
             # Randomly choose 5% of the training set as validation set.
             __indexes = torch.randperm(len(__adapted_dataset))
-            __val_indexes = __indexes[: int(val_ratio * len(__indexes))]
-            __trn_indexes = __indexes[int(val_ratio * len(__indexes)) :]
+            __val_indexes = __indexes[
+                : int(temp_scale_val_ratio * len(__indexes))
+            ]
+            __trn_indexes = __indexes[
+                int(temp_scale_val_ratio * len(__indexes)) :
+            ]
             __trn_dataset = __adapted_dataset.subset(__trn_indexes)
             __val_dataset = __adapted_dataset.subset(__val_indexes)
             self.adapted_dataset = __trn_dataset
@@ -192,7 +197,7 @@ class Classification(BaseStrategy):
             pin_memory_device=str(self.device),
             persistent_workers=persistent_workers,
             collate_fn=_clf_collate_fn,
-            # drop_last=True,
+            drop_last=True,
         )
 
     def model_adaptation(self, model=None):
@@ -353,6 +358,8 @@ class Classification(BaseStrategy):
             _optim.step(_eval_temperature)
 
         self._collect_replay_samples()
+        # Record the accuracy on the training set (in a hacky way)
+        self.trn_acc.append(self.plugins[1].metrics[0]._metric.result())
         super()._after_training_exp(**kwargs)
 
     def _collect_replay_samples(self):
@@ -405,9 +412,11 @@ class Classification(BaseStrategy):
     def predict_by_all_exp(
         self,
         tst_dataset,
+        tst_time_aug: int = 1,
         num_exp: int = 1,
         exp_weights: Optional[Sequence[float]] = None,
-        tst_time_aug: int = 1,
+        exp_trn_acc_lower_bound: Optional[Sequence[float]] = None,
+        ignore_singular_exp: bool = False,
         remove_extreme_logits: bool = True,
     ):
         """This is not an avalanche function."""
@@ -426,7 +435,7 @@ class Classification(BaseStrategy):
         )
         _tst_dataloader = DataLoader(
             _tst_dataset,
-            batch_size=512,
+            batch_size=self.train_mb_size,
             num_workers=8,
             pin_memory=True if self.device.type == "cuda" else False,
             shuffle=False,
@@ -436,12 +445,31 @@ class Classification(BaseStrategy):
 
         # Get all the experiences that contain a class that are last seen for
         # `num_exp` times.
+        _exp_to_ignore = set()
+        if exp_trn_acc_lower_bound is not None:
+            for __exp, __acc in enumerate(self.trn_acc):
+                if __acc < exp_trn_acc_lower_bound:
+                    _exp_to_ignore.add(__exp)
+        if ignore_singular_exp:
+            for __exp, __cls_in_exp in enumerate(self.classes_in_experiences):
+                if len(__cls_in_exp) == 1:
+                    _exp_to_ignore.add(__exp)
+
         _cls_to_last_seen_exps = {}
         for __exp, __cls_in_exp in enumerate(self.classes_in_experiences):
             for __cls in __cls_in_exp:
                 if __cls not in _cls_to_last_seen_exps:
                     _cls_to_last_seen_exps[__cls] = []
                 _cls_to_last_seen_exps[__cls].append(__exp)
+
+        # Iterate `_cls_to_last_seen_exps` and remove the experiences that
+        # are marked as `ignore` if there are other experiences
+        for __cls, __exps in _cls_to_last_seen_exps.items():
+            if len(__exps) > 1:
+                _cls_to_last_seen_exps[__cls] = [
+                    __exp for __exp in __exps if __exp not in _exp_to_ignore
+                ]
+
         # Only take the last `num_exp` experiences.
         for __cls, __exps in _cls_to_last_seen_exps.items():
             _cls_to_last_seen_exps[__cls] = sorted(__exps)[-num_exp:]
@@ -501,8 +529,9 @@ class Classification(BaseStrategy):
                         __features = self.model.forward_features(__pld)
                     __logits = self.model.forward_head(__features)
                     if self.logit_calibr == "norm":
-                        __logits[:, __all_classes_in_exp] = \
-                            self.logit_norm[__exp_id](__logits[:, __all_classes_in_exp])
+                        __logits[:, __all_classes_in_exp] = self.logit_norm[
+                            __exp_id
+                        ](__logits[:, __all_classes_in_exp])
                     elif self.logit_calibr == "temp":
                         __logits[:, __all_classes_in_exp] = (
                             __logits[:, __all_classes_in_exp]
@@ -512,12 +541,21 @@ class Classification(BaseStrategy):
 
                     for __c in __classes_in_exp:
                         assert torch.all(
-                            _tst_logits[__c][__exp_id][__j, _start_idx:__end_idx] == 0
+                            _tst_logits[__c][__exp_id][
+                                __j, _start_idx:__end_idx
+                            ]
+                            == 0
                         )
-                        _tst_logits[__c][__exp_id][__j, _start_idx:__end_idx] = __logits[:, __c]
+                        _tst_logits[__c][__exp_id][
+                            __j, _start_idx:__end_idx
+                        ] = __logits[:, __c]
 
-                    assert torch.all(_tst_features[__exp_id][__j, _start_idx:__end_idx] == 0)
-                    _tst_features[__exp_id][__j, _start_idx:__end_idx] = __features
+                    assert torch.all(
+                        _tst_features[__exp_id][__j, _start_idx:__end_idx] == 0
+                    )
+                    _tst_features[__exp_id][
+                        __j, _start_idx:__end_idx
+                    ] = __features
                 _tst_targets[_start_idx:__end_idx] = __targets
                 _start_idx = __end_idx
 
@@ -544,10 +582,9 @@ class Classification(BaseStrategy):
             device=self.device,
         )
         for __c, __exp_logits in _tst_logits.items():
-
             # Sometimes there are less experiences than `num_exp`,
             # so we take the last `len(__exp_logits)` experiences.
-            __exp_weights = exp_weights[-len(__exp_logits):]
+            __exp_weights = exp_weights[-len(__exp_logits) :]
 
             # Make sure that the experiences are sorted in ascending order.
             __exps = sorted(__exp_logits.keys())

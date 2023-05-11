@@ -126,16 +126,22 @@ class BaseStrategy(SupervisedTemplate):
             self.hat_reg_factor = 0.0
             print("HAT is frozen (hat_reg_factor = 0.0)")
         else:
-            __hat_reg_decay_factor = ((49 - self.task_id) / 49) ** self.hat_reg_decay_exp
+            __hat_reg_decay_factor = (
+                (49 - self.task_id) / 49
+            ) ** self.hat_reg_decay_exp
             # If the number of classes is small, we add more regularization
             # otherwise we subtract some regularization.
-            __hat_reg_enrich_ratio = 1 + (
-                len(self.experience.classes_in_this_experience) - 25
-            ) * self.hat_reg_enrich_ratio / 100
-            self.hat_reg_factor = \
-                self.hat_reg_base_factor * \
-                __hat_reg_enrich_ratio * \
-                __hat_reg_decay_factor
+            __hat_reg_enrich_ratio = (
+                1
+                + (len(self.experience.classes_in_this_experience) - 25)
+                * self.hat_reg_enrich_ratio
+                / 100
+            )
+            self.hat_reg_factor = (
+                self.hat_reg_base_factor
+                * __hat_reg_enrich_ratio
+                * __hat_reg_decay_factor
+            )
             # Extremely small regularization for replayed samples during
             # representation learning is the only way ...
             # if self.task_id >= 1 and hasattr(self, "proj_head_dim") and self.num_replay_samples_per_batch > 0:
@@ -222,8 +228,11 @@ class BaseStrategy(SupervisedTemplate):
     def _after_training_exp(self, **kwargs):
         super()._after_training_exp(**kwargs)
         # Report the HAT mask usage
-        if self.hat_config is not None and self.verbose and not \
-                self.freeze_hat:
+        if (
+            self.hat_config is not None
+            and self.verbose
+            and not self.freeze_hat
+        ):
             _mask_util_df = get_hat_util(module=self.model)
             print(_mask_util_df)
         # Unfreeze everything

@@ -202,10 +202,10 @@ class SupContrast(BaseStrategy):
             pin_memory_device=str(self.device),
             persistent_workers=persistent_workers,
             collate_fn=_sup_contrast_collate_fn,
-            # drop_last=True,
+            drop_last=True,
         )
 
-    def _construct_replay_tensors(self):
+    def _construct_replay_tensors(self, target=None):
         # Contrastive learning requires a different set of features
         # like [sample_1_features, sample_2_features] for each sample
         # in the minibatch. We need to construct these tensors for

@@ -7,9 +7,9 @@ sys.path.insert(0, "avalanche")
 
 #######################################
 
-import os
-import json
 import argparse
+import json
+import os
 
 import numpy as np
 import torch.optim.lr_scheduler
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         "--config",
         type=int,
         required=True,
-        choices=[1, 2, 3],
+        choices=[1, 2, 3, 4, 5, 6],
         help="Select the scenario configuration. ",
     )
     parser.add_argument(
@@ -88,8 +88,8 @@ if __name__ == "__main__":
         type=float,
         default=1.0,
         help="The decay exponent for the HAT regularization term over time. "
-             "1.0 means the decay is linear (experience n has (49-n)/49 "
-             "decay. 0.0 means no decay.",
+        "1.0 means the decay is linear (experience n has (49-n)/49 "
+        "decay. 0.0 means no decay.",
     )
     parser.add_argument(
         "--hat_reg_enrich_ratio",
@@ -100,7 +100,6 @@ if __name__ == "__main__":
         "regularization term is increased by (c - 25)% where c is the "
         "number of classes in the current experience. 0.0 means no "
         "enrichment.",
-
     )
     parser.add_argument(
         "--rep_num_epochs",
@@ -341,8 +340,15 @@ if __name__ == "__main__":
     if os.path.exists(os.path.join(ckpt_dir_path, "rep.pth")):
         # rep.model = torch.load(os.path.join(ckpt_dir_path, "rep.pth"))
         clf.model = torch.load(os.path.join(ckpt_dir_path, "clf_model.pth"))
-        clf.logit_norm = torch.load(os.path.join(ckpt_dir_path, "clf_logit_norm.pth"))
-        clf.logit_temp = torch.load(os.path.join(ckpt_dir_path, "clf_logit_temp.pth"))
+        clf.logit_norm = torch.load(
+            os.path.join(ckpt_dir_path, "clf_logit_norm.pth")
+        )
+        clf.logit_temp = torch.load(
+            os.path.join(ckpt_dir_path, "clf_logit_temp.pth")
+        )
+        clf.trn_acc = torch.load(
+            os.path.join(ckpt_dir_path, "clf_trn_acc.pth")
+        )
 
         # Probably needs to iterate over the train stream so that the clf can
         # get to know which experiences and classes
@@ -362,13 +368,20 @@ if __name__ == "__main__":
             )
             rep.sync_replay_features(clf)
 
-        print(f"Training done in {competition_plugins[0].time_spent:.2f} minutes.")
+        print(
+            f"Training done in {competition_plugins[0].time_spent:.2f} minutes."
+        )
 
         # Save the model(s)
         # torch.save(rep.model, os.path.join(ckpt_dir_path, "rep_model.pth"))
         torch.save(clf.model, os.path.join(ckpt_dir_path, "clf_model.pth"))
-        torch.save(clf.logit_norm, os.path.join(ckpt_dir_path, "clf_logit_norm.pth"))
-        torch.save(clf.logit_temp, os.path.join(ckpt_dir_path, "clf_logit_temp.pth"))
+        torch.save(
+            clf.logit_norm, os.path.join(ckpt_dir_path, "clf_logit_norm.pth")
+        )
+        torch.save(
+            clf.logit_temp, os.path.join(ckpt_dir_path, "clf_logit_temp.pth")
+        )
+        torch.save(clf.trn_acc, os.path.join(ckpt_dir_path, "clf_trn_acc.pth"))
 
         # Save a readable copy of the args for reference (with json)
         with open(os.path.join(ckpt_dir_path, "args.json"), "w") as __f:
@@ -376,13 +389,16 @@ if __name__ == "__main__":
 
     # --- Make prediction on test-set samples
     # This is for testing purpose only.
-    print("Testing with tta = 1 and tta = 18 ...")
     _final_acc = []
-    for __tta in [1, 18]:
+    _tst_config = [[1, 1], [18, 1], [18, 3]]
+    for __tta, __num_exp in _tst_config:
+        print(f"Testing with tta = {__tta} and num_exp = {__num_exp} ...")
         tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
             benchmark.test_stream[0].dataset,
             tst_time_aug=__tta,  # Should be `args.tst_time_aug`
-            num_exp=3,
+            num_exp=__num_exp,
+            exp_trn_acc_lower_bound=0.6,
+            ignore_singular_exp=True,
             remove_extreme_logits=True,
         )
 
@@ -679,3 +695,4 @@ if __name__ == "__main__":
 # `train(3) is the rep with 1 hat reg with drop_last=False
 
 # TODO: different learning rate for clf backbone and clf head
+# TODO: check the RAM and GPU memory usage
