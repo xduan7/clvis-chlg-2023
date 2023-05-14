@@ -1,4 +1,5 @@
 import math
+import os
 from typing import List, Optional, Sequence
 
 import torch
@@ -18,6 +19,10 @@ from .base import BaseStrategy
 
 # Validation set size (for temperature scaling)
 temp_scale_val_ratio = 0.1
+# Number of epochs for temperature scaling
+temp_scale_num_epochs = 16
+# Number of epochs for normalization scaling
+norm_scale_num_epochs = 16
 
 # Original SupContrast augmentation without `RandomGrayscale`
 _aug_tsfm = transforms.Compose(
@@ -113,8 +118,10 @@ class Classification(BaseStrategy):
         self.logit_calibr = logit_calibr
 
         self.classes_in_experiences = []
-        self.logit_norm = nn.ModuleList([])
+        self.classes_trained_in_experiences = []
+        self.logit_norm = nn.ParameterList([])
         self.logit_temp = nn.ParameterList([])
+        self.logit_batchnorm = nn.ModuleList([])
         self.trn_acc = []
 
         self.classes_trained_in_this_experience = None
@@ -209,35 +216,50 @@ class Classification(BaseStrategy):
                 __p.requires_grad = True
 
         self.classes_in_experiences.append(
+            # sorted(self.experience.classes_in_this_experience)
             self.experience.classes_in_this_experience
         )
 
         if self.replay and self.train_exp_logits_only:
             self.classes_trained_in_this_experience = (
-                self.experience.classes_in_this_experience + [100]
+                self.classes_in_experiences[-1] + [100]
             )
             # Reset the last neuron of the classifier head
             __bound = 1 / math.sqrt(_model.linear.weight.size(1))
             self.model.linear.weight.data[-1, :].uniform_(-__bound, __bound)
             self.model.linear.bias.data[-1] = 0
         elif self.train_exp_logits_only:
-            self.classes_trained_in_this_experience = (
-                self.experience.classes_in_this_experience
-            )
+            self.classes_trained_in_this_experience = \
+                self.classes_in_experiences[-1]
         else:
             self.classes_trained_in_this_experience = list(range(100))
 
+        self.classes_trained_in_experiences.append(
+            self.classes_trained_in_this_experience
+        )
         self.num_classes_trained_in_this_experience = len(
             self.classes_trained_in_this_experience
         )
 
         if self.logit_calibr == "norm":
-            self.logit_norm.append(
-                nn.BatchNorm1d(
-                    self.num_classes_trained_in_this_experience,
-                    affine=False,
-                ).to(self.device, non_blocking=True)
-            )
+            # logit_norm is not learnable
+            # contains the mean and std of the logits of the classes
+            # trained in the current experience
+            if len(self.logit_norm) == 0:
+                _out_features = self.model.linear.weight.shape[0]
+                # Add mean and std for the logits of the classes
+                self.logit_norm.append(
+                    nn.Parameter(
+                        torch.zeros(_out_features),
+                        requires_grad=False,
+                    ).to(self.device, non_blocking=True)
+                )
+                self.logit_norm.append(
+                    nn.Parameter(
+                        torch.ones(_out_features),
+                        requires_grad=False,
+                    ).to(self.device, non_blocking=True)
+                )
         elif self.logit_calibr == "temp":
             self.logit_temp.append(
                 nn.Parameter(
@@ -245,8 +267,14 @@ class Classification(BaseStrategy):
                     requires_grad=True,
                 ).to(self.device, non_blocking=True)
             )
-
-        self._del_replay_features(self.experience.classes_in_this_experience)
+        elif self.logit_calibr == "batchnorm":
+            self.logit_batchnorm.append(
+                nn.BatchNorm1d(
+                    self.num_classes_trained_in_this_experience,
+                    affine=False,
+                ).to(self.device, non_blocking=True)
+            )
+        self._del_replay_features(self.classes_in_experiences[-1])
         if self.train_exp_logits_only:
             self._construct_replay_tensors(
                 target=self.num_classes_trained_in_this_experience - 1
@@ -269,7 +297,7 @@ class Classification(BaseStrategy):
 
             # Forward
             self._before_forward(**kwargs)
-            _logits = _features = self.forward_(
+            _logits = self.forward_(
                 model=self.model,
                 images=self.mb_x,
                 mb_it=mb_it,
@@ -278,10 +306,13 @@ class Classification(BaseStrategy):
             self.mb_output = _logits[
                 :, self.classes_trained_in_this_experience
             ]
-            if self.logit_calibr == "norm":
-                self.mb_output = self.logit_norm[
-                    self.experience.current_experience
-                ](self.mb_output)
+            if self.logit_calibr == "batchnorm":
+                self.mb_output = self.logit_batchnorm[self.task_id](self.mb_output)
+            # elif self.logit_calibr == "norm":
+            #     # TODO: Not sure if we should normalize the logits here ...
+            #     __mean = self.logit_norm[0][self.classes_trained_in_this_experience]
+            #     __std = self.logit_norm[1][self.classes_trained_in_this_experience]
+            #     self.mb_output = (self.mb_output - __mean) / __std
 
             # Add replay samples here ..
             # TODO: Not sure how many replay samples to use here ...
@@ -317,45 +348,9 @@ class Classification(BaseStrategy):
     def _after_training_exp(self, **kwargs):
         """Calibrate the logits with temperature scaling."""
         if self.logit_calibr == "temp":
-            self.model.eval()
-            _logits, _targets = [], []
-            with torch.no_grad():
-                for __images, __targets, __task_id in self.val_dataloader:
-                    __images = __images.to(device=self.device)
-                    __targets = __targets.to(device=self.device)
-
-                    if self.hat_config is None:
-                        __features = self.model.forward_features(__images)
-                    else:
-                        _pld = HATPayload(
-                            data=__images,
-                            task_id=__task_id,
-                            mask_scale=self.hat_config.max_trn_mask_scale,
-                        )
-                        __features = self.model.forward_features(_pld)
-
-                    __logits = self.model.forward_head(__features)
-                    if self.train_exp_logits_only:
-                        __logits = __logits[
-                            :, self.experience.classes_in_this_experience
-                        ]
-
-                    _logits.append(__logits)
-                    _targets.append(__targets)
-
-            _logits = torch.cat(_logits).detach()
-            _targets = torch.cat(_targets).detach()
-
-            _temp = self.logit_temp[self.experience.current_experience]
-            _optim = optim.LBFGS([_temp], lr=0.01, max_iter=50)
-
-            def _eval_temperature():
-                _optim.zero_grad()
-                __loss = nn.CrossEntropyLoss()(_logits / _temp, _targets)
-                __loss.backward()
-                return __loss
-
-            _optim.step(_eval_temperature)
+            self._train_logit_temp(num_epochs=temp_scale_num_epochs)
+        elif self.logit_calibr == "norm":
+            self._calculate_logit_norm(num_epochs=norm_scale_num_epochs)
 
         self._collect_replay_samples()
         # Record the accuracy on the training set (in a hacky way)
@@ -397,7 +392,7 @@ class Classification(BaseStrategy):
         _targets = torch.cat(_targets).detach()
 
         # _class_feature_means = []
-        for __c in self.experience.classes_in_this_experience:
+        for __c in self.classes_in_experiences[-1]:
             __class_features = _features[_targets == __c]
 
             # Use K means to find representative samples
@@ -406,7 +401,85 @@ class Classification(BaseStrategy):
                 num_clusters=self.num_replay_samples_per_class,
             )
 
-    # TODO: common procedures for different predictions
+    def _train_logit_temp(self, num_epochs=1):
+        self.model.eval()
+        _logits, _targets = [], []
+        for __e in range(num_epochs):
+            with torch.no_grad():
+                for __images, __targets, __task_id in self.val_dataloader:
+                    __images = __images.to(device=self.device)
+                    __targets = __targets.to(device=self.device)
+
+                    __logits = self.forward_(
+                        model=self.model,
+                        images=__images,
+                        return_features=False,
+                        mask_scale=self.hat_config.max_trn_mask_scale,
+                    ).detach()
+                    # if self.hat_config is None:
+                    #     __features = self.model.forward_features(__images)
+                    # else:
+                    #     _pld = HATPayload(
+                    #         data=__images,
+                    #         task_id=__task_id,
+                    #         mask_scale=self.hat_config.max_trn_mask_scale,
+                    #     )
+                    #     __features = self.model.forward_features(_pld)
+                    #
+                    # __logits = self.model.forward_head(__features)
+                    __logits = __logits[
+                               :, self.classes_trained_in_this_experience
+                               ]
+                    _logits.append(__logits)
+                    _targets.append(__targets)
+
+        _logits = torch.cat(_logits)
+        _targets = torch.cat(_targets)
+
+        _temp = self.logit_temp[self.task_id]
+        _optim = optim.LBFGS([_temp], lr=0.01, max_iter=50)
+
+        def _eval_temperature():
+            _optim.zero_grad()
+            __loss = nn.CrossEntropyLoss()(_logits / _temp, _targets)
+            __loss.backward()
+            return __loss
+
+        _optim.step(_eval_temperature)
+
+    @torch.no_grad()
+    def _calculate_logit_norm(self, num_epochs=1):
+        self.model.eval()
+        _logits = []
+        for __e in range(num_epochs):
+            for __images, __targets, __task_id in self.dataloader:
+                __images = __images.to(device=self.device)
+                __targets = __targets.to(device=self.device)
+                __logits = self.forward_(
+                    model=self.model,
+                    images=__images,
+                    return_features=False,
+                    mask_scale=self.hat_config.max_trn_mask_scale,
+                ).detach()
+                # if self.hat_config is None:
+                #     __features = self.model.forward_features(__images)
+                # else:
+                #     _pld = HATPayload(
+                #         data=__images,
+                #         task_id=__task_id,
+                #         mask_scale=self.hat_config.max_trn_mask_scale,
+                #     )
+                #     __features = self.model.forward_features(_pld)
+                #
+                # __logits = self.model.forward_head(__features)
+                __logits = __logits[
+                           :, self.classes_trained_in_this_experience
+                           ]
+                _logits.append(__logits)
+
+        _logits = torch.cat(_logits)
+        self.logit_norm[0][self.classes_trained_in_this_experience] = _logits.mean(dim=0)
+        self.logit_norm[1][self.classes_trained_in_this_experience] = _logits.std(dim=0)
 
     @torch.no_grad()
     def predict_by_all_exp(
@@ -427,7 +500,9 @@ class Classification(BaseStrategy):
 
         # Freeze the model including the batch norm layers.
         self.model.eval()
-        for __n in self.logit_norm:
+        self.logit_batchnorm.eval()
+        self.logit_temp.eval()
+        for __n in self.logit_batchnorm:
             __n.track_running_stats = False
 
         _tst_dataset = tst_dataset.replace_current_transform_group(
@@ -465,10 +540,13 @@ class Classification(BaseStrategy):
         # Iterate `_cls_to_last_seen_exps` and remove the experiences that
         # are marked as `ignore` if there are other experiences
         for __cls, __exps in _cls_to_last_seen_exps.items():
-            if len(__exps) > 1:
-                _cls_to_last_seen_exps[__cls] = [
-                    __exp for __exp in __exps if __exp not in _exp_to_ignore
-                ]
+            __exps_ = [
+                __e for __e in __exps if __e not in _exp_to_ignore
+            ]
+            if len(__exps_) > 0:
+                _cls_to_last_seen_exps[__cls] = __exps_
+            else:
+                _cls_to_last_seen_exps[__cls] = sorted(__exps)[-1:]
 
         # Only take the last `num_exp` experiences.
         for __cls, __exps in _cls_to_last_seen_exps.items():
@@ -499,6 +577,9 @@ class Classification(BaseStrategy):
                     len(_tst_dataset),
                     device=self.device,
                 )
+                # Initialize the logits to NaN so that we can detect the
+                # samples that are not predicted by the experience.
+                _tst_logits[__cls][__exp][:] = torch.nan
         _tst_targets = -torch.ones(
             len(_tst_dataset),
             dtype=torch.long,
@@ -515,36 +596,52 @@ class Classification(BaseStrategy):
                     __exp_id,
                     __classes_in_exp,
                 ) in _last_seen_exps_to_cls.items():
-                    __all_classes_in_exp = self.classes_in_experiences[
+                    # This is a temporary hack to avoid the problem of the
+                    # batch norm not working due to less features.
+                    __classes_trained_in_exp = self.classes_trained_in_experiences[
                         __exp_id
                     ]
-                    if self.hat_config is None:
-                        __features = self.model.forward_features(__images)
-                    else:
-                        __pld = HATPayload(
-                            data=__images,
-                            task_id=__exp_id,
-                            mask_scale=self.hat_config.max_trn_mask_scale,
-                        )
-                        __features = self.model.forward_features(__pld)
-                    __logits = self.model.forward_head(__features)
+                    # if self.hat_config is None:
+                    #     __features = self.model.forward_features(__images)
+                    # else:
+                    #     __pld = HATPayload(
+                    #         data=__images,
+                    #         task_id=__exp_id,
+                    #         mask_scale=self.hat_config.max_trn_mask_scale,
+                    #     )
+                    #     __features = self.model.forward_features(__pld)
+                    __features = self.forward_(
+                        model=self.model,
+                        images=__images,
+                        return_features=True,
+                        mask_scale=self.hat_config.max_trn_mask_scale,
+                    ).detach()
+                    __logits = self.model.forward_head(__features).detach()
                     if self.logit_calibr == "norm":
-                        __logits[:, __all_classes_in_exp] = self.logit_norm[
-                            __exp_id
-                        ](__logits[:, __all_classes_in_exp])
+                        __logits[:, __classes_trained_in_exp] = (
+                            __logits[:, __classes_trained_in_exp]
+                            - self.logit_norm[0][__classes_trained_in_exp]
+                        ) / self.logit_norm[1][__classes_trained_in_exp]
                     elif self.logit_calibr == "temp":
-                        __logits[:, __all_classes_in_exp] = (
-                            __logits[:, __all_classes_in_exp]
+                        __logits[:, __classes_trained_in_exp] = (
+                            __logits[:, __classes_trained_in_exp]
                             / self.logit_temp[__exp_id]
                         )
-                        __logits = __logits[:, __classes_in_exp]
+                    elif self.logit_calibr == "batchnorm":
+                        __logits[:, __classes_trained_in_exp] = self.logit_batchnorm[
+                            __exp_id
+                        ](__logits[:, __classes_trained_in_exp])
 
+                    assert set(__classes_in_exp).issubset(
+                        set(__classes_trained_in_exp)
+                    ), f"{__classes_in_exp} not in {__classes_trained_in_exp}"
                     for __c in __classes_in_exp:
                         assert torch.all(
-                            _tst_logits[__c][__exp_id][
-                                __j, _start_idx:__end_idx
-                            ]
-                            == 0
+                            torch.isnan(
+                                _tst_logits[__c][__exp_id][
+                                    __j, _start_idx:__end_idx
+                                ]
+                            )
                         )
                         _tst_logits[__c][__exp_id][
                             __j, _start_idx:__end_idx
@@ -586,10 +683,12 @@ class Classification(BaseStrategy):
             # so we take the last `len(__exp_logits)` experiences.
             __exp_weights = exp_weights[-len(__exp_logits) :]
 
-            # Make sure that the experiences are sorted in ascending order.
+            # Make sure that the experiences are sorted in ascending order so
+            # that we are only taking the last few experiences.
             __exps = sorted(__exp_logits.keys())
             for __i, __exp in enumerate(__exps):
                 __exp_weight = __exp_weights[__i]
+                # __logits.shape == (tst_time_aug, num_samples)
                 __logits = __exp_logits[__exp]
                 _tst_logits_[:, __c] += __exp_weight * __logits.mean(dim=0)
 
@@ -617,7 +716,7 @@ class Classification(BaseStrategy):
 
         # Freeze the model including the batch norm layers.
         self.model.eval()
-        for __n in self.logit_norm:
+        for __n in self.logit_batchnorm:
             __n.track_running_stats = False
 
         _tst_dataset = tst_dataset.replace_current_transform_group(
@@ -669,9 +768,9 @@ class Classification(BaseStrategy):
                     __features = self.model.forward_features(__pld)
                 __logits = self.model.forward_head(__features)
 
-                if self.logit_calibr == "norm":
+                if self.logit_calibr == "batchnorm":
                     __logits = __logits[:, self.classes_in_experiences[-1]]
-                    __logits = self.logit_norm[-1](__logits)
+                    __logits = self.logit_batchnorm[-1](__logits)
                 elif self.logit_calibr == "temp":
                     __logits = __logits[:, self.classes_in_experiences[-1]]
                     __logits = __logits / self.logit_temp[-1]
@@ -729,3 +828,60 @@ class Classification(BaseStrategy):
                 remove_extreme_logits=remove_extreme_logits,
                 **kwargs,
             )
+
+    @staticmethod
+    def has_ckpt(ckpt_dir_path: str):
+        return os.path.exists(os.path.join(ckpt_dir_path, "clf_model.pth"))
+
+    def save_ckpt(self, ckpt_dir_path: str):
+        torch.save(self.model, os.path.join(ckpt_dir_path, "clf_model.pth"))
+        torch.save(
+            self.logit_norm,
+            os.path.join(ckpt_dir_path, "clf_logit_norm.pth"),
+        )
+        torch.save(
+            self.logit_temp,
+            os.path.join(ckpt_dir_path, "clf_logit_temp.pth")
+        )
+        torch.save(
+            self.logit_batchnorm,
+            os.path.join(ckpt_dir_path, "clf_logit_batchnorm.pth")
+        )
+        torch.save(
+            self.trn_acc, os.path.join(ckpt_dir_path, "clf_trn_acc.pth")
+        )
+        torch.save(
+            self.classes_in_experiences,
+            os.path.join(ckpt_dir_path, "clf_classes_in_experiences.pth"),
+        )
+        torch.save(
+            self.classes_trained_in_experiences,
+            os.path.join(
+                ckpt_dir_path, "clf_classes_trained_in_experiences.pth"
+            ),
+        )
+
+    def load_ckpt(self, ckpt_dir_path: str):
+        self.model = torch.load(
+            os.path.join(ckpt_dir_path, "clf_model.pth")
+        ).to(self.device)
+        self.logit_norm = torch.load(
+            os.path.join(ckpt_dir_path, "clf_logit_norm.pth")
+        ).to(self.device)
+        self.logit_temp = torch.load(
+            os.path.join(ckpt_dir_path, "clf_logit_temp.pth")
+        ).to(self.device)
+        self.logit_batchnorm = torch.load(
+            os.path.join(ckpt_dir_path, "clf_logit_batchnorm.pth")
+        ).to(self.device)
+        self.trn_acc = torch.load(
+            os.path.join(ckpt_dir_path, "clf_trn_acc.pth")
+        )
+        self.classes_in_experiences = torch.load(
+            os.path.join(ckpt_dir_path, "clf_classes_in_experiences.pth")
+        )
+        self.classes_trained_in_experiences = torch.load(
+            os.path.join(
+                ckpt_dir_path, "clf_classes_trained_in_experiences.pth"
+            )
+        )

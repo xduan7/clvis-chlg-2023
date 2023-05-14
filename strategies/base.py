@@ -199,6 +199,7 @@ class BaseStrategy(SupervisedTemplate):
                     max_trn_mask_scale=self.hat_config.max_trn_mask_scale,
                 )
             else:
+                # Save mask scale for regularization term
                 self.mask_scale = mask_scale
             _pld = HATPayload(
                 data=images,

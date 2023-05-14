@@ -192,7 +192,7 @@ if __name__ == "__main__":
         "--clf_logit_calibr",
         type=str,
         default="norm",
-        choices=["none", "temp", "norm"],
+        choices=["none", "temp", "norm", "batchnorm"],
         help="Logit calibration method.",
     )
     parser.add_argument(
@@ -337,25 +337,14 @@ if __name__ == "__main__":
     # --- Training Loops
     # Check if there is a checkpoint to load
     ckpt_dir_path = get_ckpt_dir_path(args)
-    if os.path.exists(os.path.join(ckpt_dir_path, "rep.pth")):
-        # rep.model = torch.load(os.path.join(ckpt_dir_path, "rep.pth"))
-        clf.model = torch.load(os.path.join(ckpt_dir_path, "clf_model.pth"))
-        clf.logit_norm = torch.load(
-            os.path.join(ckpt_dir_path, "clf_logit_norm.pth")
-        )
-        clf.logit_temp = torch.load(
-            os.path.join(ckpt_dir_path, "clf_logit_temp.pth")
-        )
-        clf.trn_acc = torch.load(
-            os.path.join(ckpt_dir_path, "clf_trn_acc.pth")
-        )
-
-        # Probably needs to iterate over the train stream so that the clf can
-        # get to know which experiences and classes
-        for __exp in benchmark.train_stream:
-            clf.classes_in_experiences.append(__exp.classes_in_this_experience)
-
+    print(f"ckpt_dir_path: {ckpt_dir_path}")
+    if clf.has_ckpt(ckpt_dir_path):
+        clf.load_ckpt(ckpt_dir_path)
     else:
+        # Save a readable copy of the args for reference (with json)
+        with open(os.path.join(ckpt_dir_path, "args.json"), "w") as __f:
+            json.dump(vars(args), __f, indent=4)
+
         for __exp in benchmark.train_stream:
             print(f"Training on experience {__exp.current_experience} ... ")
             rep.train(
@@ -371,30 +360,25 @@ if __name__ == "__main__":
         print(
             f"Training done in {competition_plugins[0].time_spent:.2f} minutes."
         )
-
-        # Save the model(s)
-        # torch.save(rep.model, os.path.join(ckpt_dir_path, "rep_model.pth"))
-        torch.save(clf.model, os.path.join(ckpt_dir_path, "clf_model.pth"))
-        torch.save(
-            clf.logit_norm, os.path.join(ckpt_dir_path, "clf_logit_norm.pth")
-        )
-        torch.save(
-            clf.logit_temp, os.path.join(ckpt_dir_path, "clf_logit_temp.pth")
-        )
-        torch.save(clf.trn_acc, os.path.join(ckpt_dir_path, "clf_trn_acc.pth"))
-
-        # Save a readable copy of the args for reference (with json)
-        with open(os.path.join(ckpt_dir_path, "args.json"), "w") as __f:
-            json.dump(vars(args), __f, indent=4)
+        clf.save_ckpt(ckpt_dir_path)
 
     # --- Make prediction on test-set samples
     # This is for testing purpose only.
     _final_acc = []
     _tst_config = [[1, 1], [18, 1], [18, 3]]
+    # Get a fraction of the test-set of size 32
+    _tst_dataset = benchmark.test_stream[0].dataset
+    # _tst_dataset = benchmark.test_stream[0].dataset.subset(
+    #     indices=np.random.choice(
+    #         np.arange(len(benchmark.test_stream[0].dataset)),
+    #         size=64,
+    #         replace=False,
+    #     )
+    # )
     for __tta, __num_exp in _tst_config:
         print(f"Testing with tta = {__tta} and num_exp = {__num_exp} ...")
         tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
-            benchmark.test_stream[0].dataset,
+            _tst_dataset,
             tst_time_aug=__tta,  # Should be `args.tst_time_aug`
             num_exp=__num_exp,
             exp_trn_acc_lower_bound=0.6,
@@ -695,4 +679,9 @@ if __name__ == "__main__":
 # `train(3) is the rep with 1 hat reg with drop_last=False
 
 # TODO: different learning rate for clf backbone and clf head
-# TODO: check the RAM and GPU memory usage
+# TODO: check the RAM and GPU memory usage (especially during inference)
+# TODO: test the model with `torch.set_float32_matmul_precision('high')`
+
+# `train` is norm approach where the norm is also applied during training
+# `train(1)` is norm approach where the norm is not applied during training
+
