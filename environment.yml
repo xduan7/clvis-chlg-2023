@@ -26,8 +26,8 @@ dependencies:
 - tqdm
 - conda-forge::pycocotools
 - conda-forge::torchmetrics
-- python=3.9
-- pytorch::pytorch>=1.8
+- python=3.10
+- pytorch::pytorch=2.0
 - pytorch::torchvision
 - pytorch::torchaudio
 - pip:
@@ -39,3 +39,4 @@ dependencies:
     - lvis
     - dill
     - seaborn
+    - nni

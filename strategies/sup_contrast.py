@@ -179,11 +179,11 @@ class SupContrast(BaseStrategy):
             loggers=[InteractiveLogger()] if verbose else None,
         )
 
-    def train_dataset_adaptation(self, **kwargs):
-        super().train_dataset_adaptation(**kwargs)
-        self.adapted_dataset = (
-            self.adapted_dataset.remove_current_transform_group()
-        )
+    # def train_dataset_adaptation(self, **kwargs):
+    #     super().train_dataset_adaptation(**kwargs)
+    #     self.adapted_dataset = (
+    #         self.adapted_dataset.remove_current_transform_group()
+    #     )
 
     def make_train_dataloader(
         self,

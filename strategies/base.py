@@ -4,11 +4,56 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 from torch.optim import Optimizer
+from torch.utils.data import Dataset
 
 from avalanche.core import SupervisedPlugin
 from avalanche.training.templates import SupervisedTemplate
 from hat import HATPayload
 from hat.utils import get_hat_mask_scale, get_hat_reg_term, get_hat_util
+
+
+class DatasetWithTsfm(Dataset):
+
+    def __init__(
+        self,
+        dataset,
+        img_tsfm=None,
+        trgt_tsfm=None,
+    ):
+        self.dataset = dataset
+        self.img_tsfm = img_tsfm
+        self.trgt_tsfm = trgt_tsfm
+
+    def remove_current_transform_group(self):
+        self.img_tsfm = None
+        self.trgt_tsfm = None
+        return self
+
+    def replace_current_transform_group(
+        self, transform_group: tuple
+    ):
+        assert len(transform_group) == 2
+        self.img_tsfm = transform_group[0]
+        self.trgt_tsfm = transform_group[1]
+        return self
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, item):
+        img, trgt, exp = self.dataset[item]
+        if self.img_tsfm is not None:
+            img = self.img_tsfm(img)
+        if self.trgt_tsfm is not None:
+            trgt = self.trgt_tsfm(trgt)
+        return img, trgt, exp
+
+    def subset(self, indices):
+        return DatasetWithTsfm(
+            [self.dataset[i] for i in indices],
+            self.img_tsfm,
+            self.trgt_tsfm,
+        )
 
 
 class BaseStrategy(SupervisedTemplate):
@@ -97,6 +142,15 @@ class BaseStrategy(SupervisedTemplate):
             __targets += [__c if target is None else target] * len(__l)
         self.replay_feature_tensor = torch.cat(__logits, dim=0)
         self.replay_target_tensor = torch.tensor(__targets, device=self.device)
+
+    def train_dataset_adaptation(self, **kwargs):
+        super().train_dataset_adaptation()
+        self.adapted_dataset = (
+            self.adapted_dataset.remove_current_transform_group()
+        )
+        self.adapted_dataset = DatasetWithTsfm(
+            self.adapted_dataset,
+        )
 
     def model_adaptation(self, model=None):
         _model = super().model_adaptation(model)
@@ -187,6 +241,7 @@ class BaseStrategy(SupervisedTemplate):
         return_features: bool,
         mb_it: Optional[int] = None,
         mask_scale: Optional[float] = None,
+        task_id: Optional[int] = None,
     ):
         if self.hat_config is None:
             _features = model.forward_features(images)
@@ -201,9 +256,13 @@ class BaseStrategy(SupervisedTemplate):
             else:
                 # Save mask scale for regularization term
                 self.mask_scale = mask_scale
+
+            if task_id is None:
+                task_id = self.task_id
+
             _pld = HATPayload(
                 data=images,
-                task_id=self.task_id,
+                task_id=task_id,
                 mask_scale=self.mask_scale,
             )
             _features = model.forward_features(_pld)

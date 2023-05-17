@@ -188,7 +188,7 @@ class Classification(BaseStrategy):
             self.val_adapted_dataset = __val_dataset
             self.val_dataloader = DataLoader(
                 self.val_adapted_dataset,
-                batch_size=self.train_mb_size,
+                batch_size=self.train_mb_size * 2,
                 shuffle=shuffle,
                 num_workers=num_workers,
                 pin_memory=pin_memory if self.device.type == "cuda" else False,
@@ -306,8 +306,8 @@ class Classification(BaseStrategy):
             self.mb_output = _logits[
                 :, self.classes_trained_in_this_experience
             ]
-            if self.logit_calibr == "batchnorm":
-                self.mb_output = self.logit_batchnorm[self.task_id](self.mb_output)
+            # if self.logit_calibr == "batchnorm":
+            #     self.mb_output = self.logit_batchnorm[self.task_id](self.mb_output)
             # elif self.logit_calibr == "norm":
             #     # TODO: Not sure if we should normalize the logits here ...
             #     __mean = self.logit_norm[0][self.classes_trained_in_this_experience]
@@ -510,7 +510,7 @@ class Classification(BaseStrategy):
         )
         _tst_dataloader = DataLoader(
             _tst_dataset,
-            batch_size=self.train_mb_size,
+            batch_size=self.train_mb_size * 2,
             num_workers=8,
             pin_memory=True if self.device.type == "cuda" else False,
             shuffle=False,
@@ -615,6 +615,7 @@ class Classification(BaseStrategy):
                         images=__images,
                         return_features=True,
                         mask_scale=self.hat_config.max_trn_mask_scale,
+                        task_id=__exp_id,
                     ).detach()
                     __logits = self.model.forward_head(__features).detach()
                     if self.logit_calibr == "norm":

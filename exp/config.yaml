@@ -24,7 +24,7 @@ trialCodeDirectory: "/home/duan/projects/clvis-chlg"
 trialCommand: PYTHONPATH="/home/duan/projects/clvis-chlg:${PYTHONPATH}"  /home/duan/software/anaconda3/envs/clvis-chlg/bin/python train.py --config 1
 
 tuner:
-  name: Random
+  name: TPE
   classArgs:
     optimize_mode: maximize
 

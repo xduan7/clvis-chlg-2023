@@ -31,6 +31,13 @@ from utils.competition_plugins import GPUMemoryChecker, RAMChecker, TimeChecker
 from utils.get_ckpt_dir_path import get_ckpt_dir_path
 from utils.params import merge_params, print_params
 
+# https://github.com/pytorch/pytorch/issues/8126
+os.system("taskset -p 0xffffffffffffffffffffffffffffffff %d" % os.getpid())
+# https://discuss.pytorch.org/t/cpu-cores-not-working/19222
+torch.set_num_threads(20)
+# torch.multiprocessing.set_start_method('spawn', force=True)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -191,7 +198,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--clf_logit_calibr",
         type=str,
-        default="norm",
+        default="none",
         choices=["none", "temp", "norm", "batchnorm"],
         help="Logit calibration method.",
     )
@@ -365,9 +372,9 @@ if __name__ == "__main__":
     # --- Make prediction on test-set samples
     # This is for testing purpose only.
     _final_acc = []
-    _tst_config = [[1, 1], [18, 1], [18, 3]]
-    # Get a fraction of the test-set of size 32
+
     _tst_dataset = benchmark.test_stream[0].dataset
+    # Get a fraction of the test-set of size 32
     # _tst_dataset = benchmark.test_stream[0].dataset.subset(
     #     indices=np.random.choice(
     #         np.arange(len(benchmark.test_stream[0].dataset)),
@@ -375,6 +382,15 @@ if __name__ == "__main__":
     #         replace=False,
     #     )
     # )
+    # tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
+    #     _tst_dataset,
+    #     tst_time_aug=args.tst_time_aug,
+    #     num_exp=1,
+    #     exp_trn_acc_lower_bound=None,
+    #     ignore_singular_exp=None,
+    #     remove_extreme_logits=True,
+    # )
+    _tst_config = [[1, 1], [18, 1], [18, 3]]
     for __tta, __num_exp in _tst_config:
         print(f"Testing with tta = {__tta} and num_exp = {__num_exp} ...")
         tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
@@ -682,6 +698,12 @@ if __name__ == "__main__":
 # TODO: check the RAM and GPU memory usage (especially during inference)
 # TODO: test the model with `torch.set_float32_matmul_precision('high')`
 
-# `train` is norm approach where the norm is also applied during training
-# `train(1)` is norm approach where the norm is not applied during training
+# TODO: this experiment needs a rerun
+# `train` non reference 0.282/0.3164
+# `train(1)` batch norm (the right way) 0.2728/0.3254
+# `train(2)` temp 0.284/0.3272
+# `train(3)` batch norm (the right way but not during training)
+# `train(4)` norm 0.1652/0.1901
+# `train(5)` norm (not in training) 0.2779/0.3222
+
 
