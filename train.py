@@ -375,52 +375,52 @@ if __name__ == "__main__":
 
     _tst_dataset = benchmark.test_stream[0].dataset
     # Get a fraction of the test-set of size 32
-    # _tst_dataset = benchmark.test_stream[0].dataset.subset(
-    #     indices=np.random.choice(
-    #         np.arange(len(benchmark.test_stream[0].dataset)),
-    #         size=64,
-    #         replace=False,
-    #     )
-    # )
-    # tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
-    #     _tst_dataset,
-    #     tst_time_aug=args.tst_time_aug,
-    #     num_exp=1,
-    #     exp_trn_acc_lower_bound=None,
-    #     ignore_singular_exp=None,
-    #     remove_extreme_logits=True,
-    # )
-    _tst_config = [[1, 1], [18, 1], [18, 3]]
-    for __tta, __num_exp in _tst_config:
-        print(f"Testing with tta = {__tta} and num_exp = {__num_exp} ...")
-        tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
-            _tst_dataset,
-            tst_time_aug=__tta,  # Should be `args.tst_time_aug`
-            num_exp=__num_exp,
-            exp_trn_acc_lower_bound=0.6,
-            ignore_singular_exp=True,
-            remove_extreme_logits=True,
+    _tst_dataset = benchmark.test_stream[0].dataset.subset(
+        indices=np.random.choice(
+            np.arange(len(benchmark.test_stream[0].dataset)),
+            size=64,
+            replace=False,
         )
+    )
+    tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
+        _tst_dataset,
+        tst_time_aug=args.tst_time_aug,
+        num_exp=1,
+        exp_trn_acc_lower_bound=None,
+        ignore_singular_exp=None,
+        remove_extreme_logits=True,
+    )
+    # _tst_config = [[1, 1], [18, 1], [18, 3]]
+    # for __tta, __num_exp in _tst_config:
+    #     print(f"Testing with tta = {__tta} and num_exp = {__num_exp} ...")
+    #     tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
+    #         _tst_dataset,
+    #         tst_time_aug=__tta,  # Should be `args.tst_time_aug`
+    #         num_exp=__num_exp,
+    #         exp_trn_acc_lower_bound=0.6,
+    #         ignore_singular_exp=True,
+    #         remove_extreme_logits=True,
+    #     )
 
-        # Save predictions or print the results
-        if args.benchmark:
-            import dill
+    # Save predictions or print the results
+    if args.benchmark:
+        import dill
 
-            with open("./data/challenge_test_labels.pkl", "rb") as __f:
-                tst_labels = dill.load(__f)
+        with open("./data/challenge_test_labels.pkl", "rb") as __f:
+            tst_labels = dill.load(__f)
 
-            tst_labels = np.array(tst_labels)
-            __acc = np.mean(tst_predictions == tst_labels)
+        tst_labels = np.array(tst_labels)
+        __acc = np.mean(tst_predictions == tst_labels)
 
-            np.save(f"{args.name}_{args.config}_logits.npy", tst_logits)
-            np.save(
-                f"{args.name}_{args.config}_predictions.npy", tst_predictions
-            )
-        else:
-            __acc = np.mean(tst_predictions == tst_targets)
+        np.save(f"{args.name}_{args.config}_logits.npy", tst_logits)
+        np.save(
+            f"{args.name}_{args.config}_predictions.npy", tst_predictions
+        )
+    else:
+        __acc = np.mean(tst_predictions == tst_targets)
 
-        print(f"Test-set accuracy: {__acc}")
-        _final_acc.append(__acc)
+    print(f"Test-set accuracy: {__acc}")
+    _final_acc.append(__acc)
 
     # Report NNI result
     try:
@@ -430,84 +430,84 @@ if __name__ == "__main__":
     except ImportError:
         pass
 
-    # Error analysis
-    # Evaluate top-5 accuracy based on logits and targets
-    top_5_acc = top_k_accuracy_score(
-        y_score=tst_logits,
-        y_true=tst_targets,
-        k=5,
-    )
-    print(f"Test-set top-5 accuracy: {top_5_acc}")
-
-    # Plot the confusion matrix
-    import matplotlib.pyplot as plt
-    from sklearn.metrics import confusion_matrix
-
-    plt.figure(figsize=(10, 10))
-    plt.imshow(
-        confusion_matrix(
-            y_true=tst_targets,
-            y_pred=tst_predictions,
-        ),
-        cmap="Blues",
-    )
-    plt.xlabel("Predicted")
-    plt.ylabel("True")
-    plt.show()
-
-    # Count the predictions occurrences
-    import collections
-
-    pred_counter = collections.Counter(tst_predictions)
-    print(pred_counter)
-
-    # Find patterns in mis-classifications
-    cm = confusion_matrix(
-        y_true=tst_targets,
-        y_pred=tst_predictions,
-    )
-    cls_to_last_seen_exp = {}
-    for __exp, __cls_in_exp in enumerate(clf.classes_in_experiences):
-        for __cls in __cls_in_exp:
-            cls_to_last_seen_exp[__cls] = __exp
-    # Get the highest N values (could be on the diagonal)
-    n = 50
-    # Get the indices of the N highest values in the confusion matrix
-    indices = np.argpartition(cm.ravel(), -n)[-n:]
-    # Sort the indices
-    indices = indices[np.argsort(-cm.ravel()[indices])]
-    for __i in indices:
-        __r, __c = np.unravel_index(__i, cm.shape)
-        if __r != __c:
-            __re = cls_to_last_seen_exp[__r]
-            __ce = cls_to_last_seen_exp[__c]
-
-            __shared_exp_id = None
-
-            for __id, __exp in enumerate(benchmark.train_stream):
-                if (
-                    __r in __exp.classes_in_this_experience
-                    and __c in __exp.classes_in_this_experience
-                ):
-                    if __shared_exp_id is None:
-                        __shared_exp_id = [__id]
-                    else:
-                        __shared_exp_id.append(__id)
-
-            if __shared_exp_id is not None:
-                print(
-                    f"Class {__r} (last seen in {__re}) is "
-                    f"misclassified as {__c} (last seen in {__ce}) "
-                    f"{cm[__r, __c]} times "
-                    f"and they are in the same exp {__shared_exp_id}"
-                )
-            else:
-                print(
-                    f"Class {__r} (last seen in {__re}) is "
-                    f"misclassified as {__c} (last seen in {__ce}) "
-                    f"{cm[__r, __c]} times "
-                    f"and they are never in the same exp"
-                )
+    # # Error analysis
+    # # Evaluate top-5 accuracy based on logits and targets
+    # top_5_acc = top_k_accuracy_score(
+    #     y_score=tst_logits,
+    #     y_true=tst_targets,
+    #     k=5,
+    # )
+    # print(f"Test-set top-5 accuracy: {top_5_acc}")
+    #
+    # # Plot the confusion matrix
+    # import matplotlib.pyplot as plt
+    # from sklearn.metrics import confusion_matrix
+    #
+    # plt.figure(figsize=(10, 10))
+    # plt.imshow(
+    #     confusion_matrix(
+    #         y_true=tst_targets,
+    #         y_pred=tst_predictions,
+    #     ),
+    #     cmap="Blues",
+    # )
+    # plt.xlabel("Predicted")
+    # plt.ylabel("True")
+    # plt.show()
+    #
+    # # Count the predictions occurrences
+    # import collections
+    #
+    # pred_counter = collections.Counter(tst_predictions)
+    # print(pred_counter)
+    #
+    # # Find patterns in mis-classifications
+    # cm = confusion_matrix(
+    #     y_true=tst_targets,
+    #     y_pred=tst_predictions,
+    # )
+    # cls_to_last_seen_exp = {}
+    # for __exp, __cls_in_exp in enumerate(clf.classes_in_experiences):
+    #     for __cls in __cls_in_exp:
+    #         cls_to_last_seen_exp[__cls] = __exp
+    # # Get the highest N values (could be on the diagonal)
+    # n = 50
+    # # Get the indices of the N highest values in the confusion matrix
+    # indices = np.argpartition(cm.ravel(), -n)[-n:]
+    # # Sort the indices
+    # indices = indices[np.argsort(-cm.ravel()[indices])]
+    # for __i in indices:
+    #     __r, __c = np.unravel_index(__i, cm.shape)
+    #     if __r != __c:
+    #         __re = cls_to_last_seen_exp[__r]
+    #         __ce = cls_to_last_seen_exp[__c]
+    #
+    #         __shared_exp_id = None
+    #
+    #         for __id, __exp in enumerate(benchmark.train_stream):
+    #             if (
+    #                 __r in __exp.classes_in_this_experience
+    #                 and __c in __exp.classes_in_this_experience
+    #             ):
+    #                 if __shared_exp_id is None:
+    #                     __shared_exp_id = [__id]
+    #                 else:
+    #                     __shared_exp_id.append(__id)
+    #
+    #         if __shared_exp_id is not None:
+    #             print(
+    #                 f"Class {__r} (last seen in {__re}) is "
+    #                 f"misclassified as {__c} (last seen in {__ce}) "
+    #                 f"{cm[__r, __c]} times "
+    #                 f"and they are in the same exp {__shared_exp_id}"
+    #             )
+    #         else:
+    #             print(
+    #                 f"Class {__r} (last seen in {__re}) is "
+    #                 f"misclassified as {__c} (last seen in {__ce}) "
+    #                 f"{cm[__r, __c]} times "
+    #                 f"and they are never in the same exp"
+    #             )
 
 # Note to self
 # These three experiments are all performed with the new cosine scaling
@@ -696,14 +696,30 @@ if __name__ == "__main__":
 
 # TODO: different learning rate for clf backbone and clf head
 # TODO: check the RAM and GPU memory usage (especially during inference)
-# TODO: test the model with `torch.set_float32_matmul_precision('high')`
 
-# TODO: this experiment needs a rerun
 # `train` non reference 0.282/0.3164
 # `train(1)` batch norm (the right way) 0.2728/0.3254
 # `train(2)` temp 0.284/0.3272
 # `train(3)` batch norm (the right way but not during training)
 # `train(4)` norm 0.1652/0.1901
 # `train(5)` norm (not in training) 0.2779/0.3222
+# `train(6)` batch norm (the wrong way) 0.33/0.39
 
+# TODO: investigate embedding augmentation
+# TODO: investigate num replay samples (inversed ratio w.r.t. the number of
+#  classes in the experience)
 
+# `train(6) is increasing the replay samples to match the ratio
+# `train(7) is increasing the replay samples to match the ratio with
+# embedding augmentation
+
+# TODO: rerun the hparam test
+# train is the default kmeans with the trial hparams on config 1
+# train(1) is the sampled kmeans with the trial hparams on config 1
+# train(4) is the sampled kmeans with the trial hparams on config 2
+# train(3) is the sampled kmeans with the trial hparams on config 3
+
+# Collect replay_features_and_logits
+# train(4) is config 2
+# train(5) is config 3
+# train(6) is config 1

@@ -13,7 +13,7 @@
   },
   "hat_reg_enrich_ratio": {
     "_type": "uniform",
-    "_value": [0.0, 2.0]
+    "_value": [-2.0, 0.0]
   },
   "rep_num_epochs": {
     "_type": "choice",

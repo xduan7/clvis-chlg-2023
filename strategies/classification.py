@@ -64,7 +64,7 @@ def _k_means(
     num_clusters: int,
     max_num_iter: int = 100,
     tol: float = 1e-4,
-) -> torch.Tensor:
+):
     _centers = features[torch.randperm(features.size(0))[:num_clusters]]
     for _ in range(max_num_iter):
         distances = torch.cdist(features, _centers)
@@ -75,9 +75,41 @@ def _k_means(
         if torch.norm(_new_centers - _centers) < tol:
             break
         _centers = _new_centers
-    _distances = torch.cdist(features, _centers)
-    _nearest_indices = torch.argmin(_distances, dim=0)
-    return features[_nearest_indices]
+    distances = torch.cdist(features, _centers)
+    labels = torch.argmin(distances, dim=1)
+
+    # If the labels only contain one cluster, then we need to re-run the
+    # k-means algorithm
+    # if len(torch.unique(labels)) == num_clusters:
+    #     break
+    # else:
+    #     print("Re-running k-means algorithm ... ")
+
+    # Get the features that are closest to each center
+    _nearest_indices = []
+    for __c in _centers:
+        __dist = torch.cdist(features, __c.view(1, -1))
+        _nearest_indices.append(torch.argmin(__dist, dim=0))
+    return (
+        features[_nearest_indices, :],
+        torch.zeros_like(features[_nearest_indices, :]),
+    )
+
+    # Get the mean and std of each cluster
+    # return (
+    #     torch.stack(
+    #         [
+    #             features[labels == __i, :].mean(dim=0)
+    #             for __i in torch.unique(labels)
+    #         ]
+    #     ),
+    #     torch.stack(
+    #         [
+    #             features[labels == __i, :].std(dim=0)
+    #             for __i in torch.unique(labels)
+    #         ]
+    #     ),
+    # )
 
 
 class Classification(BaseStrategy):
@@ -126,6 +158,9 @@ class Classification(BaseStrategy):
 
         self.classes_trained_in_this_experience = None
         self.num_classes_trained_in_this_experience = None
+
+        # FIXME: experimental only; remove this for production
+        self.replay_features_and_logits = {}
 
     # TODO: different learning rates for backbone and head
     # TODO: rotated head
@@ -306,13 +341,12 @@ class Classification(BaseStrategy):
             self.mb_output = _logits[
                 :, self.classes_trained_in_this_experience
             ]
-            # if self.logit_calibr == "batchnorm":
-            #     self.mb_output = self.logit_batchnorm[self.task_id](self.mb_output)
-            # elif self.logit_calibr == "norm":
-            #     # TODO: Not sure if we should normalize the logits here ...
-            #     __mean = self.logit_norm[0][self.classes_trained_in_this_experience]
-            #     __std = self.logit_norm[1][self.classes_trained_in_this_experience]
-            #     self.mb_output = (self.mb_output - __mean) / __std
+            if self.logit_calibr == "batchnorm":
+                self.mb_output = self.logit_batchnorm[self.task_id](self.mb_output)
+            elif self.logit_calibr == "norm":
+                __mean = self.logit_norm[0][self.classes_trained_in_this_experience]
+                __std = self.logit_norm[1][self.classes_trained_in_this_experience]
+                self.mb_output = (self.mb_output - __mean) / __std
 
             # Add replay samples here ..
             # TODO: Not sure how many replay samples to use here ...
@@ -399,6 +433,17 @@ class Classification(BaseStrategy):
             self.replay_features[__c] = _k_means(
                 __class_features,
                 num_clusters=self.num_replay_samples_per_class,
+            )
+
+        # FIXME: experimental only; remove this for production
+        self.replay_features_and_logits[self.task_id] = {}
+        for __c in self.classes_in_experiences[-1]:
+
+            __features = self.replay_features[__c][0]
+            __logits = self.model.forward_head(__features)
+            self.replay_features_and_logits[self.task_id][__c] = (
+                __features,
+                __logits,
             )
 
     def _train_logit_temp(self, num_epochs=1):
@@ -500,7 +545,7 @@ class Classification(BaseStrategy):
 
         # Freeze the model including the batch norm layers.
         self.model.eval()
-        self.logit_batchnorm.eval()
+        self.logit_batchnorm.train()
         self.logit_temp.eval()
         for __n in self.logit_batchnorm:
             __n.track_running_stats = False
@@ -510,7 +555,7 @@ class Classification(BaseStrategy):
         )
         _tst_dataloader = DataLoader(
             _tst_dataset,
-            batch_size=self.train_mb_size * 2,
+            batch_size=self.train_mb_size * 8,
             num_workers=8,
             pin_memory=True if self.device.type == "cuda" else False,
             shuffle=False,
@@ -861,6 +906,10 @@ class Classification(BaseStrategy):
                 ckpt_dir_path, "clf_classes_trained_in_experiences.pth"
             ),
         )
+        torch.save(
+            self.replay_features,
+            os.path.join(ckpt_dir_path, "clf_replay_features.pth"),
+        )
 
     def load_ckpt(self, ckpt_dir_path: str):
         self.model = torch.load(
@@ -886,3 +935,11 @@ class Classification(BaseStrategy):
                 ckpt_dir_path, "clf_classes_trained_in_experiences.pth"
             )
         )
+        _replay_features = torch.load(
+            os.path.join(ckpt_dir_path, "clf_replay_features.pth")
+        )
+        for __c, (__mean, __std) in _replay_features:
+            self.replay_features[__c] = (
+                __mean.to(self.device),
+                __std.to(self.device)
+            )

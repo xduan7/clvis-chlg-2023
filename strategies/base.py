@@ -136,10 +136,16 @@ class BaseStrategy(SupervisedTemplate):
             return
 
         __logits, __targets = [], []
-        for __c, __l in self.replay_features.items():
+        for __c, (__mean, __std) in self.replay_features.items():
             # Shape of the logits are [num_samples, num_features]
-            __logits.append(__l)
-            __targets += [__c if target is None else target] * len(__l)
+            for __i in range(__mean.shape[0]):
+                __l = [
+                    torch.normal(__mean[__i], __std[__i]).to(self.device)
+                    for _ in range(self.train_mb_size * 2)
+                ]
+                __l = torch.stack(__l, dim=0)
+                __logits.append(__l)
+                __targets += [__c if target is None else target] * len(__l)
         self.replay_feature_tensor = torch.cat(__logits, dim=0)
         self.replay_target_tensor = torch.tensor(__targets, device=self.device)
 
@@ -148,9 +154,9 @@ class BaseStrategy(SupervisedTemplate):
         self.adapted_dataset = (
             self.adapted_dataset.remove_current_transform_group()
         )
-        self.adapted_dataset = DatasetWithTsfm(
-            self.adapted_dataset,
-        )
+        # self.adapted_dataset = DatasetWithTsfm(
+        #     self.adapted_dataset,
+        # )
 
     def model_adaptation(self, model=None):
         _model = super().model_adaptation(model)
@@ -161,6 +167,14 @@ class BaseStrategy(SupervisedTemplate):
                 if isinstance(__m, HATMasker):
                     for __p in __m.parameters():
                         __p.requires_grad = False
+
+        # if self.replay:
+        #     self.num_replay_samples_per_batch = \
+        #         100 * self.train_mb_size // len(
+        #             self.experience.classes_in_this_experience) - self.train_mb_size
+        #     print(f"Change the number of replay samples to "
+        #           f"{self.num_replay_samples_per_batch}")
+
         return _model
 
     def make_optimizer(self):
@@ -209,9 +223,6 @@ class BaseStrategy(SupervisedTemplate):
             )
 
     def _get_replay_samples(self):
-        # TODO: add random noise to the replay samples. It should be
-        #  multiplication rather than addition because some of the features
-        #  are really close to zero.
         if (not self.replay) or (self.replay_feature_tensor is None):
             return None, None
         elif (
