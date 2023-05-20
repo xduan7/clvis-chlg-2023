@@ -96,20 +96,14 @@ def _k_means(
     )
 
     # Get the mean and std of each cluster
-    # return (
-    #     torch.stack(
-    #         [
-    #             features[labels == __i, :].mean(dim=0)
-    #             for __i in torch.unique(labels)
-    #         ]
-    #     ),
-    #     torch.stack(
-    #         [
-    #             features[labels == __i, :].std(dim=0)
-    #             for __i in torch.unique(labels)
-    #         ]
-    #     ),
-    # )
+    # _mean, _std = [], []
+    # for __i in torch.unique(labels):
+    #     _mean.append(features[labels == __i, :].mean(dim=0))
+    #     _std.append(features[labels == __i, :].std(dim=0))
+    #     # If there is only one sample in the cluster, then set the std to 0
+    #     if torch.isnan(_std[-1]).any():
+    #         _std[-1] = torch.zeros_like(_std[-1])
+    # return torch.stack(_mean), torch.stack(_std)
 
 
 class Classification(BaseStrategy):
@@ -117,12 +111,14 @@ class Classification(BaseStrategy):
         self,
         model: nn.Module,
         optimizer: Optimizer,
+        lr_decay: bool,
         train_mb_size: int,
         train_epochs: int,
         hat_reg_base_factor: float,
         hat_reg_decay_exp: float,
         hat_reg_enrich_ratio: float,
         num_replay_samples_per_batch: int,
+        l1_factor: float,
         device: torch.device,
         freeze_hat: bool,
         freeze_backbone: bool,
@@ -145,10 +141,13 @@ class Classification(BaseStrategy):
             plugins=plugins,
             verbose=verbose,
         )
+        self.lr_decay = lr_decay
         self.freeze_backbone = freeze_backbone
         self.train_exp_logits_only = train_exp_logits_only
         self.logit_calibr = logit_calibr
+        self.l1_factor = l1_factor
 
+        self.lr_scheduler = None
         self.classes_in_experiences = []
         self.classes_trained_in_experiences = []
         self.logit_norm = nn.ParameterList([])
@@ -164,7 +163,6 @@ class Classification(BaseStrategy):
 
     # TODO: different learning rates for backbone and head
     # TODO: rotated head
-    # TODO: smooth labels
     # TODO: add weights to loss function if replay?
 
     @staticmethod
@@ -318,6 +316,19 @@ class Classification(BaseStrategy):
             self._construct_replay_tensors()
         return _model
 
+    def make_optimizer(self):
+        super().make_optimizer()
+        if self.lr_decay:
+            _milestones = [
+                math.floor(self.train_epochs * 0.8),
+                math.floor(self.train_epochs * 0.9),
+            ]
+            self.lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer=self.optimizer,
+                milestones=_milestones,
+                gamma=0.1,
+            )
+
     def training_epoch(self, **kwargs):
         _num_mb = len(self.dataloader)
         for mb_it, self.mbatch in enumerate(self.dataloader):
@@ -349,25 +360,30 @@ class Classification(BaseStrategy):
                 self.mb_output = (self.mb_output - __mean) / __std
 
             # Add replay samples here ..
-            # TODO: Not sure how many replay samples to use here ...
-            __replay_features, __replay_targets = self._get_replay_samples()
-            if __replay_features is not None and __replay_targets is not None:
-                __replay_logits = self.model.forward_head(__replay_features)[
+            __replay_features, __replay_targets, __replay_logits = \
+                self._get_replay_samples()
+            if __replay_features is not None:
+                __all_logits = self.model.forward_head(__replay_features)
+                __logits = __all_logits[
                     :, self.classes_trained_in_this_experience
                 ]
                 self.mb_output = torch.cat(
-                    [self.mb_output, __replay_logits], dim=0
+                    [self.mb_output, __logits], dim=0
                 )
                 self.mbatch = (
                     self.mbatch[0],
                     torch.cat([self.mb_y, __replay_targets], dim=0),
                     self.mbatch[2],
                 )
+                self.loss += self.l1_factor * torch.nn.L1Loss()(
+                    __all_logits[:100],
+                    __replay_logits[:100],
+                )
 
             self._after_forward(**kwargs)
 
             # Loss & Backward
-            self.loss = self.criterion()
+            self.loss += self.criterion()
             self._before_backward(**kwargs)
             self.backward()
             self._after_backward(**kwargs)
@@ -378,6 +394,11 @@ class Classification(BaseStrategy):
             self._after_update(**kwargs)
 
             self._after_training_iteration(**kwargs)
+
+    def _after_training_epoch(self, **kwargs):
+        super()._after_training_epoch(**kwargs)
+        if self.lr_decay:
+            self.lr_scheduler.step()
 
     def _after_training_exp(self, **kwargs):
         """Calibrate the logits with temperature scaling."""
@@ -433,17 +454,6 @@ class Classification(BaseStrategy):
             self.replay_features[__c] = _k_means(
                 __class_features,
                 num_clusters=self.num_replay_samples_per_class,
-            )
-
-        # FIXME: experimental only; remove this for production
-        self.replay_features_and_logits[self.task_id] = {}
-        for __c in self.classes_in_experiences[-1]:
-
-            __features = self.replay_features[__c][0]
-            __logits = self.model.forward_head(__features)
-            self.replay_features_and_logits[self.task_id][__c] = (
-                __features,
-                __logits,
             )
 
     def _train_logit_temp(self, num_epochs=1):
@@ -589,7 +599,7 @@ class Classification(BaseStrategy):
                 __e for __e in __exps if __e not in _exp_to_ignore
             ]
             if len(__exps_) > 0:
-                _cls_to_last_seen_exps[__cls] = __exps_
+                _cls_to_last_seen_exps[__cls] = sorted(__exps_)
             else:
                 _cls_to_last_seen_exps[__cls] = sorted(__exps)[-1:]
 
@@ -938,7 +948,7 @@ class Classification(BaseStrategy):
         _replay_features = torch.load(
             os.path.join(ckpt_dir_path, "clf_replay_features.pth")
         )
-        for __c, (__mean, __std) in _replay_features:
+        for __c, (__mean, __std) in _replay_features.items():
             self.replay_features[__c] = (
                 __mean.to(self.device),
                 __std.to(self.device)

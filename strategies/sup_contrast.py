@@ -256,7 +256,7 @@ class SupContrast(BaseStrategy):
                 mb_it=mb_it,
                 return_features=True,
             )
-            __replay_features, __replay_targets = self._get_replay_samples()
+            __replay_features, __replay_targets, _ = self._get_replay_samples()
             if __replay_features is not None:
                 __replay_features = __replay_features.reshape(-1, 160)
                 _features = torch.cat([_features, __replay_features], dim=0)

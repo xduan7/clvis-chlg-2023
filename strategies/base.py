@@ -104,6 +104,7 @@ class BaseStrategy(SupervisedTemplate):
         self.replay_features = {}
         self.replay_feature_tensor = None
         self.replay_target_tensor = None
+        self.replay_logit_tensor = None
         self.num_replay_samples_per_class = 2
         self.num_replay_samples_per_batch = num_replay_samples_per_batch
 
@@ -130,6 +131,7 @@ class BaseStrategy(SupervisedTemplate):
             if __c in self.replay_features:
                 del self.replay_features[__c]
 
+    @torch.no_grad()
     def _construct_replay_tensors(self, target: Optional[int] = None):
         # Construct replay feature and target tensors
         if not self.replay or len(self.replay_features) == 0:
@@ -148,6 +150,9 @@ class BaseStrategy(SupervisedTemplate):
                 __targets += [__c if target is None else target] * len(__l)
         self.replay_feature_tensor = torch.cat(__logits, dim=0)
         self.replay_target_tensor = torch.tensor(__targets, device=self.device)
+
+        # Construct replay logits
+        self.replay_logit_tensor = self.model.linear(self.replay_feature_tensor)
 
     def train_dataset_adaptation(self, **kwargs):
         super().train_dataset_adaptation()
@@ -224,12 +229,16 @@ class BaseStrategy(SupervisedTemplate):
 
     def _get_replay_samples(self):
         if (not self.replay) or (self.replay_feature_tensor is None):
-            return None, None
+            return None, None, None
         elif (
             self.num_replay_samples_per_batch
             >= self.replay_feature_tensor.shape[0]
         ):
-            return self.replay_feature_tensor, self.replay_target_tensor
+            return (
+                self.replay_feature_tensor,
+                self.replay_target_tensor,
+                self.replay_logit_tensor,
+            )
         else:
             _indices = torch.randperm(
                 self.replay_feature_tensor.shape[0],
@@ -238,6 +247,7 @@ class BaseStrategy(SupervisedTemplate):
             return (
                 self.replay_feature_tensor[_indices],
                 self.replay_target_tensor[_indices],
+                self.replay_logit_tensor[_indices],
             )
 
     def sync_replay_features(self, strategy):

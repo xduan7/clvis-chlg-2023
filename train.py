@@ -37,6 +37,7 @@ os.system("taskset -p 0xffffffffffffffffffffffffffffffff %d" % os.getpid())
 torch.set_num_threads(20)
 # torch.multiprocessing.set_start_method('spawn', force=True)
 
+torch.set_float32_matmul_precision('high')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -178,6 +179,13 @@ if __name__ == "__main__":
         default=0,
         help="Number of replay samples per batch for the classification "
         "learning phase.",
+    )
+    parser.add_argument(
+        "--clf_l1_factor",
+        type=float,
+        default=0.0,
+        help="L1 regularization factor for replay logits during the "
+             "classification learning phase.",
     )
     parser.add_argument(
         "--clf_freeze_backbone",
@@ -326,6 +334,7 @@ if __name__ == "__main__":
             lr=args.clf_lr,
             amsgrad=True,
         ),
+        lr_decay=args.clf_lr_decay,
         freeze_backbone=args.clf_freeze_backbone,
         train_exp_logits_only=args.clf_train_exp_logits_only,
         train_mb_size=args.clf_batch_size,
@@ -334,6 +343,7 @@ if __name__ == "__main__":
         hat_reg_decay_exp=args.hat_reg_decay_exp,
         hat_reg_enrich_ratio=args.hat_reg_enrich_ratio,
         num_replay_samples_per_batch=args.clf_num_replay_samples_per_batch,
+        l1_factor=args.clf_l1_factor,
         device=device,
         train_epochs=args.clf_num_epochs,
         logit_calibr=args.clf_logit_calibr,
@@ -375,13 +385,13 @@ if __name__ == "__main__":
 
     _tst_dataset = benchmark.test_stream[0].dataset
     # Get a fraction of the test-set of size 32
-    _tst_dataset = benchmark.test_stream[0].dataset.subset(
-        indices=np.random.choice(
-            np.arange(len(benchmark.test_stream[0].dataset)),
-            size=64,
-            replace=False,
-        )
-    )
+    # _tst_dataset = benchmark.test_stream[0].dataset.subset(
+    #     indices=np.random.choice(
+    #         np.arange(len(benchmark.test_stream[0].dataset)),
+    #         size=64,
+    #         replace=False,
+    #     )
+    # )
     tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
         _tst_dataset,
         tst_time_aug=args.tst_time_aug,
@@ -720,6 +730,17 @@ if __name__ == "__main__":
 # train(3) is the sampled kmeans with the trial hparams on config 3
 
 # Collect replay_features_and_logits
-# train(4) is config 2
-# train(5) is config 3
-# train(6) is config 1
+# train(4) is config 2  0.291
+# train(5) is config 3  0.2674
+# train(6) is config 1  0.3261
+
+# Test the effect of augmented embedding
+# train(7) is config 3 with augmented embedding 0.2645
+
+# Label smoothing
+# train(8) is config 3 with label smoothing (normal replay embeddings)
+# 0.2606/??
+
+# Logit regularization
+# train(9) is config 3 with logit regularization (normal replay embeddings)
+# 0.2701/
