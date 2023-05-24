@@ -10,7 +10,7 @@
 #
 ###############################################################################
 
-experimentName: "CLVIS-CHLG (config 3)"
+experimentName: "CLVIS-CHLG (config 1)"
 experimentWorkingDirectory: "/home/xduan7/projects/clvis-chlg/logs/nni"
 
 maxExperimentDuration: 14d
@@ -18,10 +18,10 @@ maxTrialNumber: 1000
 searchSpaceFile: "search_space.json"
 useAnnotation: false
 
-trialConcurrency: 3
+trialConcurrency: 6
 trialGpuNumber: 1
 trialCodeDirectory: "/home/xduan7/projects/clvis-chlg"
-trialCommand: PYTHONPATH="/home/xduan7/projects/clvis-chlg:${PYTHONPATH}" /home/xduan7/software/anaconda3/envs/clvis-chlg/bin/python train.py --config 3
+trialCommand: PYTHONPATH="/home/xduan7/projects/clvis-chlg:${PYTHONPATH}" /home/xduan7/software/anaconda3/envs/clvis-chlg/bin/python train.py --config 1 --benchmark --clf_logit_calibr batchnorm --tst_time_aug 18
 
 tuner:
   name: TPE
@@ -31,3 +31,4 @@ tuner:
 trainingService:
   platform: local
   useActiveGpu: true
+  maxTrialNumberPerGpu: 2

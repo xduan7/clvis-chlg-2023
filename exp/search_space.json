@@ -4,62 +4,86 @@
     "_value": [1]
   },
   "hat_grad_comp_factor": {
-    "_type": "loguniform",
-    "_value": [20, 500]
+    "_type": "choice",
+    "_value": [100]
   },
   "hat_reg_decay_exp": {
     "_type": "uniform",
-    "_value": [0.0, 1.0]
+    "_value": [0.2, 0.8]
   },
   "hat_reg_enrich_ratio": {
     "_type": "uniform",
-    "_value": [-2.0, 0.0]
+    "_value": [-1.5, -0.5]
   },
   "rep_num_epochs": {
-    "_type": "choice",
-    "_value": [20, 30, 40]
+    "_type": "quniform",
+    "_value": [25, 35, 1]
   },
   "rep_lr": {
     "_type": "loguniform",
-    "_value": [0.0002, 0.05]
+    "_value": [0.006, 0.01]
   },
   "rep_batch_size": {
     "_type": "choice",
-    "_value": [32, 64, 128]
+    "_value": [64]
   },
   "rep_hat_reg_base_factor": {
-    "_type": "loguniform",
-    "_value": [0.1, 10]
+    "_type": "uniform",
+    "_value": [1.2, 1.8]
   },
   "rep_proj_head_dim": {
     "_type": "choice",
-    "_value": [32, 64, 128, 256]
+    "_value": [256]
+  },
+  "rep_num_replay_samples_per_batch": {
+    "_type": "choice",
+    "_value": [4, 8, 16, 32]
+  },
+  "rep_proj_div_factor": {
+    "_type": "loguniform",
+    "_value": [0.01, 1]
   },
   "clf_num_epochs": {
-    "_type": "choice",
-    "_value": [20, 30, 40]
+    "_type": "quniform",
+    "_value": [40, 50, 1]
   },
   "clf_lr": {
     "_type": "loguniform",
-    "_value": [0.00002, 0.005]
+    "_value": [0.0002, 0.001]
+  },
+  "clf_lr_decay": {
+    "_type": "choice",
+    "_value": [0, 1]
   },
   "clf_batch_size": {
     "_type": "choice",
-    "_value": [32, 64, 128]
+    "_value": [32]
   },
   "clf_hat_reg_base_factor": {
-    "_type": "loguniform",
-    "_value": [0.1, 10]
+    "_type": "choice",
+    "_value": [2.0]
   },
   "clf_num_replay_samples_per_batch": {
     "_type": "choice",
-    "_value": [0, 4, 8, 16, 32]
+    "_value": [16]
+  },
+  "clf_logit_reg_factor": {
+    "_type": "loguniform",
+    "_value": [0.01, 1]
+  },
+  "clf_logit_reg_degree": {
+    "_type": "choice",
+    "_value": [1, 2]
   },
   "clf_freeze_hat": {
     "_type": "choice",
     "_value": [0, 1]
   },
   "clf_train_exp_logits_only": {
+    "_type": "choice",
+    "_value": [1]
+  },
+  "clf_use_momentum": {
     "_type": "choice",
     "_value": [1]
   }
