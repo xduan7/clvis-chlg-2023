@@ -3,11 +3,12 @@ import torch
 import torch.nn as nn
 from torch.nn.functional import avg_pool2d
 
-from hat import HATPayload
+from hat import HATPayload, HATConfig
 from hat.modules import HATConv2d, TaskIndexedBatchNorm2d
 
 # noinspection PyProtectedMember
 from hat.modules._base import HATPayloadCarrierMixin
+from hat.utils import get_hat_reg_term
 
 
 def conv3x3(in_planes, out_planes, hat_config, stride=1):
@@ -92,78 +93,123 @@ class HATBasicBlock(HATPayloadCarrierMixin):
 
 
 class HATResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes, nf, hat_config):
+    def __init__(
+            self,
+            block,
+            num_blocks,
+            num_classes,
+            nf,
+            hat_config,
+            num_fragments=1,
+    ):
         super(HATResNet, self).__init__()
         self.in_planes = nf
         self.hat_config = hat_config
+        self.num_fragments = num_fragments
 
-        self.conv1 = conv3x3(
-            in_planes=3,
-            out_planes=nf * 1,
-            hat_config=hat_config,
-        )
-        self.bn1 = TaskIndexedBatchNorm2d(
-            num_features=nf * 1,
-            num_tasks=hat_config.num_tasks,
-        )
+        # Split the num_tasks by num_fragments
+        __c, __r = divmod(hat_config.num_tasks, num_fragments)
+        self.num_tasks = [__c + 1] * __r + [__c] * (num_fragments - __r)
+        self.hat_configs = []
+        for __num_tasks in self.num_tasks:
+            self.hat_configs.append(
+                HATConfig(
+                    num_tasks=__num_tasks,
+                    max_trn_mask_scale=hat_config.max_trn_mask_scale,
+                    init_strat=hat_config.init_strat,
+                    grad_comp_factor=hat_config.grad_comp_factor,
+                )
+            )
+
+        self.conv1 = nn.ModuleList([
+            conv3x3(
+                in_planes=3,
+                out_planes=nf * 1,
+                hat_config=__hat_config,
+            ) for __hat_config in self.hat_configs
+        ])
+        self.bn1 = nn.ModuleList([
+            TaskIndexedBatchNorm2d(
+                num_features=nf * 1,
+                num_tasks=__hat_config.num_tasks,
+            ) for __hat_config in self.hat_configs
+        ])
         self.act1 = nn.ReLU()
-        self.layer1 = self._make_layer(
-            block=block,
-            planes=nf * 1,
-            num_blocks=num_blocks[0],
-            stride=1,
-            hat_config=hat_config,
-        )
-        self.layer2 = self._make_layer(
-            block=block,
-            planes=nf * 2,
-            num_blocks=num_blocks[1],
-            stride=2,
-            hat_config=hat_config,
-        )
-        self.layer3 = self._make_layer(
-            block=block,
-            planes=nf * 4,
-            num_blocks=num_blocks[2],
-            stride=2,
-            hat_config=hat_config,
-        )
-        self.layer4 = self._make_layer(
-            block=block,
-            planes=nf * 8,
-            num_blocks=num_blocks[3],
-            stride=2,
-            hat_config=hat_config,
-        )
+        self.layer1 = nn.ModuleList([
+            self._make_layer(
+                block=block,
+                in_planes=nf * 1,
+                planes=nf * 1,
+                num_blocks=num_blocks[0],
+                stride=1,
+                hat_config=__hat_config,
+            ) for __hat_config in self.hat_configs
+        ])
+        self.layer2 = nn.ModuleList([
+            self._make_layer(
+                block=block,
+                in_planes=nf * 1,
+                planes=nf * 2,
+                num_blocks=num_blocks[1],
+                stride=2,
+                hat_config=__hat_config,
+            ) for __hat_config in self.hat_configs
+        ])
+        self.layer3 = nn.ModuleList([
+            self._make_layer(
+                block=block,
+                in_planes=nf * 2,
+                planes=nf * 4,
+                num_blocks=num_blocks[2],
+                stride=2,
+                hat_config=__hat_config,
+            ) for __hat_config in self.hat_configs
+        ])
+        self.layer4 = nn.ModuleList([
+            self._make_layer(
+                block=block,
+                in_planes=nf * 4,
+                planes=nf * 8,
+                num_blocks=num_blocks[3],
+                stride=2,
+                hat_config=__hat_config,
+            ) for __hat_config in self.hat_configs
+        ])
         # Linear layer is shared across tasks
         self.linear = nn.Linear(
             in_features=nf * 8 * block.expansion,
             out_features=num_classes,
         )
 
-    def _make_layer(self, block, planes, num_blocks, stride, hat_config):
+    def _make_layer(self, block, in_planes, planes, num_blocks, stride, hat_config):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
         for stride in strides:
             layers.append(
                 block(
-                    in_planes=self.in_planes,
+                    in_planes=in_planes,
                     planes=planes,
                     stride=stride,
                     hat_config=hat_config,
                 ),
             )
-            self.in_planes = planes * block.expansion
+            in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
     def forward_features(self, pld: HATPayload) -> torch.Tensor:
-        pld = self.conv1(pld)
-        pld = self.bn1(pld)
+
+        _task_id = pld.task_id  # 14
+        _module_index = _task_id % self.num_fragments  # 4
+        _new_task_id = _task_id // self.num_fragments  # 2
+        pld.task_id = _new_task_id
+
+        pld = self.conv1[_module_index](pld)
+        pld = self.bn1[_module_index](pld)
         pld = pld.forward_by(self.act1)
-        pld = self.layer1(pld)
-        pld = self.layer2(pld)
-        pld = self.layer3(pld)
-        pld = self.layer4(pld)
+        pld = self.layer1[_module_index](pld)
+        pld = self.layer2[_module_index](pld)
+        pld = self.layer3[_module_index](pld)
+        pld = self.layer4[_module_index](pld)
         features = avg_pool2d(pld.data, 4)
         features = features.view(features.size(0), -1)
         return features
@@ -176,9 +222,34 @@ class HATResNet(nn.Module):
         logits = self.forward_head(features)
         return logits
 
+    def get_hat_reg_term(self, task_id: int, mask_scale: float) -> torch.Tensor:
+        from hat.modules import HATMasker
 
-def HATSlimResNet18(n_classes, hat_config, nf=20):
-    return HATResNet(HATBasicBlock, [2, 2, 2, 2], n_classes, nf, hat_config)
+        _module_index = task_id % self.num_fragments
+        _new_task_id = task_id // self.num_fragments
+
+        _reg, _cnt = 0.0, 0
+        for module in [
+            self.conv1[_module_index],
+            self.layer1[_module_index],
+            self.layer2[_module_index],
+            self.layer3[_module_index],
+            self.layer4[_module_index],
+        ]:
+            for __m in module.modules():
+                if isinstance(__m, HATMasker):
+                    _reg += __m.get_reg_term(
+                        strat="uniform",
+                        task_id=_new_task_id,
+                        mask_scale=mask_scale,
+                    )
+                    _cnt += 1
+        return _reg / _cnt if _cnt > 0 else 0.0
+
+
+def HATSlimResNet18(n_classes, hat_config, nf=20, num_fragments=1):
+    return HATResNet(HATBasicBlock, [2, 2, 2, 2], n_classes, nf, hat_config,
+                     num_fragments)
 
 
 __all__ = ["HATResNet", "HATSlimResNet18"]

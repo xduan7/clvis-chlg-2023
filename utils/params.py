@@ -43,8 +43,9 @@ def merge_params(
             warnings.warn(
                 f"Expected {__k} in override parameters to have type {__t}, "
                 f"but found type {type(__v)} of value {__v} instead. "
-                f"Overriding anyway ..."
+                f"Casting ... "
             )
+            __v = __t(__v)
         base_params[__k] = __v
 
     return base_params if _is_dict else Namespace(**base_params)

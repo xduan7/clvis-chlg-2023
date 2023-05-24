@@ -293,18 +293,26 @@ class BaseStrategy(SupervisedTemplate):
         else:
             return self.model.forward_head(_features)
 
-    def criterion(self):
-        if self.hat_config is None:
-            return super().criterion()
-        else:
-            _reg = get_hat_reg_term(
-                self.model,
-                strat="uniform",
+    def _get_hat_reg(self):
+        if hasattr(self.model, "get_hat_reg_term"):
+            return self.model.get_hat_reg_term(
                 task_id=self.task_id,
                 mask_scale=self.mask_scale,
             )
+        else:
+            return self.model.base_model.get_hat_reg_term(
+                task_id=self.task_id,
+                mask_scale=self.mask_scale,
+            )
+
+    def criterion(self):
+        if self.hat_config is None:
+            return super().criterion()
+        elif getattr(self, "freeze_hat", False):
+            return super().criterion()
+        else:
             _loss = super().criterion()
-            return _loss + self.hat_reg_factor * _reg
+            return _loss + self.hat_reg_factor * self._get_hat_reg()
 
     def _after_training_exp(self, **kwargs):
         super()._after_training_exp(**kwargs)
