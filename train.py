@@ -37,7 +37,7 @@ os.system("taskset -p 0xffffffffffffffffffffffffffffffff %d" % os.getpid())
 torch.set_num_threads(20)
 # torch.multiprocessing.set_start_method('spawn', force=True)
 
-torch.set_float32_matmul_precision('high')
+# torch.set_float32_matmul_precision('high')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -142,6 +142,13 @@ if __name__ == "__main__":
         "learning phase.",
     )
     parser.add_argument(
+        "--rep_proj_div_factor",
+        type=float,
+        default=1.0,
+        help="The divergent factor for the embedding before the projected "
+             "output of the samples and the replay embeddings."
+    )
+    parser.add_argument(
         "--rep_proj_head_dim",
         type=int,
         default=128,
@@ -181,11 +188,18 @@ if __name__ == "__main__":
         "learning phase.",
     )
     parser.add_argument(
-        "--clf_l1_factor",
+        "--clf_logit_reg_factor",
         type=float,
         default=0.0,
-        help="L1 regularization factor for replay logits during the "
+        help="Regularization factor for replay logits during the "
              "classification learning phase.",
+    )
+    parser.add_argument(
+        "--clf_logit_reg_degree",
+        type=float,
+        default=1.0,
+        help="Degree of the regularization factor for replay logits "
+             "during the classification learning phase.",
     )
     parser.add_argument(
         "--clf_freeze_backbone",
@@ -211,16 +225,22 @@ if __name__ == "__main__":
         help="Logit calibration method.",
     )
     parser.add_argument(
-        "--clf_lr_decay",
-        action="store_true",
-        help="Use a learning rate decay for the classification learning "
-        "phase. Not configurable at the moment.",
+        "--clf_lr_scheduler",
+        type=str,
+        default="none",
+        choices=["none", "multistep", "onecycle"],
+        help="Learning rate scheduler.",
     )
     parser.add_argument(
         "--tst_time_aug",
         type=int,
         default=1,
         help="Number of test-time augmentations. 1 means no augmentation.",
+    )
+    parser.add_argument(
+        "--clf_use_momentum",
+        action="store_true",
+        help="Use momentum=3 with preset weights: 1, 2, 3 for classification",
     )
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--verbose", action="store_true")
@@ -271,6 +291,7 @@ if __name__ == "__main__":
         model = HATSlimResNet18(
             n_classes=num_classes,
             hat_config=hat_config,
+            num_fragments=1,
         )
     else:
         hat_config = None
@@ -300,7 +321,8 @@ if __name__ == "__main__":
     competition_plugins = [
         # GPUMemoryChecker(max_allowed=4000, device=device),
         # RAMChecker(max_allowed=4000),
-        TimeChecker(max_allowed=500)
+        # FIXME: change me back to 500 minutes, this is for debugging only
+        TimeChecker(max_allowed=1000)
         if args.benchmark
         else TimeChecker(),
     ]
@@ -322,6 +344,7 @@ if __name__ == "__main__":
         hat_reg_decay_exp=args.hat_reg_decay_exp,
         hat_reg_enrich_ratio=args.hat_reg_enrich_ratio,
         num_replay_samples_per_batch=args.rep_num_replay_samples_per_batch,
+        proj_div_factor=args.rep_proj_div_factor,
         device=device,
         proj_head_dim=args.rep_proj_head_dim,
         plugins=[*competition_plugins],
@@ -334,7 +357,7 @@ if __name__ == "__main__":
             lr=args.clf_lr,
             amsgrad=True,
         ),
-        lr_decay=args.clf_lr_decay,
+        lr_scheduler=args.clf_lr_scheduler,
         freeze_backbone=args.clf_freeze_backbone,
         train_exp_logits_only=args.clf_train_exp_logits_only,
         train_mb_size=args.clf_batch_size,
@@ -343,11 +366,13 @@ if __name__ == "__main__":
         hat_reg_decay_exp=args.hat_reg_decay_exp,
         hat_reg_enrich_ratio=args.hat_reg_enrich_ratio,
         num_replay_samples_per_batch=args.clf_num_replay_samples_per_batch,
-        l1_factor=args.clf_l1_factor,
+        logit_reg_factor=args.clf_logit_reg_factor,
+        logit_reg_degree=args.clf_logit_reg_degree,
         device=device,
         train_epochs=args.clf_num_epochs,
         logit_calibr=args.clf_logit_calibr,
         plugins=[*competition_plugins],
+        use_momentum=args.clf_use_momentum,
         verbose=args.verbose,
     )
 
@@ -744,3 +769,33 @@ if __name__ == "__main__":
 # Logit regularization
 # train(9) is config 3 with logit regularization (normal replay embeddings)
 # 0.2701/
+
+# Embedding regularization
+# `train` is the reference 0.2818
+# `train(1)` is factor = 1, p=2  0.1091
+# `train(2)` is factor = 0.2, p=2 0.1881
+# `train(3)` is factor = 0.04, p=2 0.2583
+
+# Reference
+# `train_hparam` is config 1 (benchmark) 0.2983/0.3564
+# `train_hparam(2) is config 1 (not benchmark) 0.2946/0.3522
+
+# Rep replay
+# `train_hparam_rep_replay` is config 1 with rep replay samples 8 and the
+# factor of 1 (with tta and momentum) 0.3967
+# For reference
+# `train_hparam(1)` is config 1 with tta and momentum 0.4347
+# `train_hparam(2)` is config 1 with tta without momentum 0.4045
+
+# On data augmentation
+# `train_hparam` is without grey scale in rep 0.4407
+# `train_hparam(1)` is with doubled color jitter in rep 0.4199
+# `train_hparam(2)` is with scale=(0.2, 1.0) in clf 0.4255
+
+# On the logit/embedding regularization
+# `train_hparam(3)` is rep embedding 4 samples 0.1 factor
+# `train_hparam(4)` is clf logits degree 1 0.1 factor
+# `train_hparam(5)` is clf logits degree 2 0.1 factor
+
+# On the learning rate scheduler
+# `train_hparam(6)` is onecycle

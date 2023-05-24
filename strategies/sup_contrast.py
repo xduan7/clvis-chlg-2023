@@ -21,7 +21,7 @@ _aug_tsfm = transforms.Compose(
         transforms.RandomApply(
             [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8
         ),
-        transforms.RandomGrayscale(p=0.2),
+        # transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
         transforms.Normalize(
             mean=[0.5071, 0.4867, 0.4408],
@@ -67,7 +67,6 @@ class SupContrastLoss(nn.Module):
                 "Illegal temperature: abs({}) < 1e-8".format(self.temperature)
             )
 
-    @torch.compile
     def forward(self, features, labels):
         """Compute loss for model. If both `labels` and `mask` are None,
         it degenerates to SimCLR unsupervised loss:
@@ -143,6 +142,7 @@ class SupContrast(BaseStrategy):
         hat_reg_decay_exp: float,
         hat_reg_enrich_ratio: float,
         num_replay_samples_per_batch: int,
+        proj_div_factor: float,
         device: torch.device,
         proj_head_dim: int,
         plugins: Optional[List[SupervisedPlugin]] = None,
@@ -162,6 +162,7 @@ class SupContrast(BaseStrategy):
             plugins=plugins,
             verbose=verbose,
         )
+        self.proj_div_factor = proj_div_factor
         self.proj_head_dim = proj_head_dim
 
     # TODO: rotated head
@@ -205,24 +206,47 @@ class SupContrast(BaseStrategy):
             drop_last=True,
         )
 
-    def _construct_replay_tensors(self, target=None):
-        # Contrastive learning requires a different set of features
-        # like [sample_1_features, sample_2_features] for each sample
-        # in the minibatch. We need to construct these tensors for
-        # replay.
-        if not self.replay or len(self.replay_features) == 0:
-            return
+    # def _construct_replay_tensors(self, target=None):
+    #     # Contrastive learning requires a different set of features
+    #     # like [sample_1_features, sample_2_features] for each sample
+    #     # in the minibatch. We need to construct these tensors for
+    #     # replay.
+    #     if not self.replay or len(self.replay_features) == 0:
+    #         return
+    #
+    #     __logits, __targets = [], []
+    #     for __c, (__mean, __std) in self.replay_features.items():
+    #         assert len(__mean) == 2, (
+    #             "The implementation is based on 2 samples "
+    #             "for each class for now."
+    #         )
+    #         # No augmentation allowed here
+    #         assert torch.all(__std == 0)
+    #         __logits.append(__mean)
+    #         __targets.append(__c)
+    #     self.replay_feature_tensor = torch.stack(__logits)
+    #     self.replay_target_tensor = torch.tensor(__targets, device=self.device)
 
-        __logits, __targets = [], []
-        for __c, __l in self.replay_features.items():
-            assert len(__l) == 2, (
-                "The implementation is based on 2 samples "
-                "for each class for now."
+    def _get_replay_samples(self):
+        if (not self.replay) or (self.replay_feature_tensor is None):
+            return None, None
+        elif (
+            self.num_replay_samples_per_batch
+            >= self.replay_feature_tensor.shape[0]
+        ):
+            return (
+                self.replay_feature_tensor,
+                self.replay_target_tensor,
             )
-            __logits.append(__l)
-            __targets.append(__c)
-        self.replay_feature_tensor = torch.stack(__logits)
-        self.replay_target_tensor = torch.tensor(__targets, device=self.device)
+        else:
+            _indices = torch.randperm(
+                self.replay_feature_tensor.shape[0],
+                device=self.device,
+            )[: self.num_replay_samples_per_batch]
+            return (
+                self.replay_feature_tensor[_indices],
+                self.replay_target_tensor[_indices],
+            )
 
     def model_adaptation(self, model=None):
         self._del_replay_features(self.experience.classes_in_this_experience)
@@ -256,15 +280,20 @@ class SupContrast(BaseStrategy):
                 mb_it=mb_it,
                 return_features=True,
             )
-            __replay_features, __replay_targets, _ = self._get_replay_samples()
+            __replay_features, __replay_targets = self._get_replay_samples()
             if __replay_features is not None:
                 __replay_features = __replay_features.reshape(-1, 160)
-                _features = torch.cat([_features, __replay_features], dim=0)
-                self.mbatch = (
-                    self.mbatch[0],
-                    torch.cat([self.mb_y, __replay_targets], dim=0),
-                    self.mbatch[2],
-                )
+                # _features = torch.cat([_features, __replay_features], dim=0)
+                # self.mbatch = (
+                #     self.mbatch[0],
+                #     torch.cat([self.mb_y, __replay_targets], dim=0),
+                #     self.mbatch[2],
+                # )
+                _sim = torch.matmul(
+                    nn.functional.normalize(_features, dim=-1, eps=1e-8),
+                    nn.functional.normalize(__replay_features, dim=-1, eps=1e-8).t()
+                ).mean()
+                self.loss = - self.proj_div_factor * _sim
             _proj = self.model.proj_head(_features)
             # Reshape from [2*bsz, proj_head_dim] to [bsz, 2, proj_head_dim]
             _proj = _proj.view(2, len(self.mb_y), -1).swapaxes(0, 1)
@@ -272,7 +301,7 @@ class SupContrast(BaseStrategy):
             self._after_forward(**kwargs)
 
             # Loss & Backward
-            self.loss = self.criterion()
+            self.loss += self.criterion()
             self._before_backward(**kwargs)
             self.backward()
             self._after_backward(**kwargs)
@@ -283,12 +312,6 @@ class SupContrast(BaseStrategy):
             self._after_update(**kwargs)
 
             self._after_training_iteration(**kwargs)
-
-    # def _after_training_epoch(self, **kwargs):
-    #     # Report the HAT mask usage
-    #     if self.hat_config is not None and self.verbose:
-    #         _mask_util_df = get_hat_util(module=self.model)
-    #         print(_mask_util_df)
 
     def _after_training_exp(self, **kwargs):
         super()._after_training_exp(**kwargs)
