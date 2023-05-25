@@ -271,7 +271,7 @@ class HATResNet(nn.Module):
                     keys_to_exclude.append(f"{__k}.{__pn}")
 
         for __k in src_dict:
-            if __k not in keys_to_exclude:
+            if __k not in keys_to_exclude and __k in dst_dict:
                 dst_dict[__k].copy_(src_dict[__k])
 
         dst_module.load_state_dict(dst_dict)
@@ -289,7 +289,13 @@ class HATResNet(nn.Module):
             if _prev_module_index < 0:
                 continue
 
+            # print(f"Copying weights from {_prev_module_index} to "
+            #       f"{_module_index} for ensemble {__e}.")
+
             for __m in [self.conv1, self.bn1, self.layer1, self.layer2, self.layer3, self.layer4]:
+
+                # print(f"Copying weights of {__m} ...")
+
                 self._copy_weights(
                     src_module=__m[_prev_module_index],
                     dst_module=__m[_module_index],

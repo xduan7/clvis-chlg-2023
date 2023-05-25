@@ -209,9 +209,12 @@ class BaseStrategy(SupervisedTemplate):
             _module_index = self.task_id % _num_frag
             _new_task_id = self.task_id // _num_frag
             _num_tasks_in_this_fragment = _num_tasks[_module_index]
-            __hat_reg_decay_factor = (
-                (_num_tasks_in_this_fragment - _new_task_id - 1) / (_num_tasks_in_this_fragment - 1)
-            ) ** self.hat_reg_decay_exp
+            if _num_tasks_in_this_fragment == 1:
+                __hat_reg_decay_factor = 0.0
+            else:
+                __hat_reg_decay_factor = (
+                    (_num_tasks_in_this_fragment - _new_task_id - 1) / (_num_tasks_in_this_fragment - 1)
+                ) ** self.hat_reg_decay_exp
             # If the number of classes is small, we add more regularization
             # otherwise we subtract some regularization.
             __hat_reg_enrich_ratio = (

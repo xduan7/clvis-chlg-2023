@@ -42,7 +42,7 @@ torch.set_num_threads(20)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--name",
+        "--run_name",
         type=str,
         default="hat_with_rep",
         help="Name of the experiment. Used to create the output files.",
@@ -54,17 +54,10 @@ if __name__ == "__main__":
         help="Select zero-indexed cuda device. -1 to use CPU.",
     )
     parser.add_argument(
-        "--config",
-        type=int,
+        "--config_file",
+        type=str,
         required=True,
-        choices=[1, 2, 3, 4, 5, 6],
-        help="Select the scenario configuration. ",
-    )
-    parser.add_argument(
-        "--benchmark",
-        action="store_true",
-        help="Use benchmark (challenge) datasets, in which case, the test "
-        "results will be unavailable.",
+        help="Path to the config file.",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -258,7 +251,6 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
-    args.config_file = f"config_s{args.config}.pkl"
     try:
         import nni
 
@@ -279,9 +271,8 @@ if __name__ == "__main__":
 
     # --- Benchmark
     benchmark = get_cifar_based_benchmark(
-        scenario_config=args.config_file,
+        scenario_config_file=args.config_file,
         seed=args.seed,
-        benchmark=args.benchmark,
     )
 
     # --- Model
@@ -334,10 +325,7 @@ if __name__ == "__main__":
     competition_plugins = [
         # GPUMemoryChecker(max_allowed=4000, device=device),
         # RAMChecker(max_allowed=4000),
-        # FIXME: change me back to 500 minutes, this is for debugging only
-        TimeChecker(max_allowed=1000)
-        if args.benchmark
-        else TimeChecker(),
+        TimeChecker(max_allowed=500)
     ]
 
     # --- Your Plugins
@@ -402,6 +390,9 @@ if __name__ == "__main__":
 
         for __exp in benchmark.train_stream:
             print(f"Training on experience {__exp.current_experience} ... ")
+            if model.num_fragments > 1:
+                model.copy_weights_from_previous_fragment(task_id=__exp.current_experience)
+
             rep.train(
                 experiences=__exp,
                 num_workers=args.num_workers,
@@ -411,8 +402,6 @@ if __name__ == "__main__":
                 num_workers=args.num_workers,
             )
             rep.sync_replay_features(clf)
-            if model.num_fragments > 1:
-                model.copy_weights_from_previous_fragment(task_id=__exp.current_experience)
 
         print(
             f"Training done in {competition_plugins[0].time_spent:.2f} minutes."
@@ -453,32 +442,27 @@ if __name__ == "__main__":
     #     )
 
     # Save predictions or print the results
-    if args.benchmark:
-        import dill
+    import dill
 
-        with open("./data/challenge_test_labels.pkl", "rb") as __f:
-            tst_labels = dill.load(__f)
+    with open("./data/challenge_test_labels.pkl", "rb") as __f:
+        tst_labels = dill.load(__f)
 
-        tst_labels = np.array(tst_labels)
-        __acc = np.mean(tst_predictions == tst_labels)
-
-        np.save(f"{args.name}_{args.config}_logits.npy", tst_logits)
-        np.save(
-            f"{args.name}_{args.config}_predictions.npy", tst_predictions
-        )
-    else:
-        __acc = np.mean(tst_predictions == tst_targets)
-
-    print(f"Test-set accuracy: {__acc}")
-    _final_acc.append(__acc)
-
-    # Report NNI result
-    try:
-        import nni
-
-        nni.report_final_result(np.max(_final_acc))
-    except ImportError:
-        pass
+    tst_labels = np.array(tst_labels)
+    __acc = np.mean(tst_predictions == tst_labels)
+    np.save(f"{args.run_name}.npy", tst_predictions)
+    # else:
+    #     __acc = np.mean(tst_predictions == tst_targets)
+    #
+    # print(f"Test-set accuracy: {__acc}")
+    # _final_acc.append(__acc)
+    #
+    # # Report NNI result
+    # try:
+    #     import nni
+    #
+    #     nni.report_final_result(np.max(_final_acc))
+    # except ImportError:
+    #     pass
 
     # # Error analysis
     # # Evaluate top-5 accuracy based on logits and targets
@@ -818,6 +802,11 @@ if __name__ == "__main__":
 # `train(1)` is the reference 44.07%
 # `train(2)` is fragment 4 44.6%
 # `train(3)` is fragment 10 42.69%
-# `train(4)` is fragment 2
-# `train(5)` is fragment 3
-# `train(6)` is fragment 5
+# `train(4)` is fragment 2 42.86%
+# `train(5)` is fragment 3 42.72%
+# `train(6)` is fragment 5 42.49%
+# `train(7)` is fragment 50 with weight transferring
+# `train(9)` is fragment 50 with fixed weight transferring
+
+# On the submission
+# `train(8)` is the reference for submission

@@ -21,7 +21,7 @@ _aug_tsfm = transforms.Compose(
         transforms.RandomApply(
             [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8
         ),
-        # transforms.RandomGrayscale(p=0.2),
+        transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
         transforms.Normalize(
             mean=[0.5071, 0.4867, 0.4408],
