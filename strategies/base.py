@@ -199,8 +199,18 @@ class BaseStrategy(SupervisedTemplate):
             self.hat_reg_factor = 0.0
             print("HAT is frozen (hat_reg_factor = 0.0)")
         else:
+            if hasattr(self.model, "num_fragments"):
+                _num_frag = self.model.num_fragments
+                _num_tasks = self.model.num_tasks
+            else:
+                _num_frag = self.model.base_model.num_fragments
+                _num_tasks = self.model.base_model.num_tasks
+
+            _module_index = self.task_id % _num_frag
+            _new_task_id = self.task_id // _num_frag
+            _num_tasks_in_this_fragment = _num_tasks[_module_index]
             __hat_reg_decay_factor = (
-                (49 - self.task_id) / 49
+                (_num_tasks_in_this_fragment - _new_task_id - 1) / (_num_tasks_in_this_fragment - 1)
             ) ** self.hat_reg_decay_exp
             # If the number of classes is small, we add more regularization
             # otherwise we subtract some regularization.

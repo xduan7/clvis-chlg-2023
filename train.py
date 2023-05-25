@@ -86,6 +86,18 @@ if __name__ == "__main__":
         help="Use hard attention to the task.",
     )
     parser.add_argument(
+        "--hat_num_fragments",
+        type=int,
+        default=1,
+        help="Number of fragments for the HAT model.",
+    )
+    parser.add_argument(
+        "--hat_num_ensembles",
+        type=int,
+        default=1,
+        help="Number of ensembles for the HAT model.",
+    )
+    parser.add_argument(
         "--hat_grad_comp_factor",
         type=float,
         default=100.0,
@@ -291,7 +303,8 @@ if __name__ == "__main__":
         model = HATSlimResNet18(
             n_classes=num_classes,
             hat_config=hat_config,
-            num_fragments=1,
+            num_fragments=args.hat_num_fragments,
+            num_ensembles=args.hat_num_ensembles,
         )
     else:
         hat_config = None
@@ -797,5 +810,9 @@ if __name__ == "__main__":
 # `train_hparam(4)` is clf logits degree 1 0.1 factor
 # `train_hparam(5)` is clf logits degree 2 0.1 factor
 
-# On the learning rate scheduler
-# `train_hparam(6)` is onecycle
+# TODO: On the learning rate scheduler
+
+# On the fragmentation of the model
+# `train(1)` is the reference
+# `train(2)` is fragment 4
+# `train(3)` is fragment 10

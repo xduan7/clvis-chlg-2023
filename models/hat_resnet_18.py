@@ -1,4 +1,6 @@
 # This file implements the slimmed ResNet with hard attention to the task,"""
+from copy import deepcopy
+
 import torch
 import torch.nn as nn
 from torch.nn.functional import avg_pool2d
@@ -8,7 +10,6 @@ from hat.modules import HATConv2d, TaskIndexedBatchNorm2d
 
 # noinspection PyProtectedMember
 from hat.modules._base import HATPayloadCarrierMixin
-from hat.utils import get_hat_reg_term
 
 
 def conv3x3(in_planes, out_planes, hat_config, stride=1):
@@ -101,11 +102,13 @@ class HATResNet(nn.Module):
             nf,
             hat_config,
             num_fragments=1,
+            num_ensembles=1,
     ):
         super(HATResNet, self).__init__()
         self.in_planes = nf
         self.hat_config = hat_config
         self.num_fragments = num_fragments
+        self.num_ensembles = num_ensembles
 
         # Split the num_tasks by num_fragments
         __c, __r = divmod(hat_config.num_tasks, num_fragments)
@@ -120,6 +123,9 @@ class HATResNet(nn.Module):
                     grad_comp_factor=hat_config.grad_comp_factor,
                 )
             )
+        # Add the ensemble modules
+        self.num_tasks = self.num_tasks * num_ensembles
+        self.hat_configs = self.hat_configs * num_ensembles
 
         self.conv1 = nn.ModuleList([
             conv3x3(
@@ -197,21 +203,25 @@ class HATResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward_features(self, pld: HATPayload) -> torch.Tensor:
-
-        _task_id = pld.task_id  # 14
-        _module_index = _task_id % self.num_fragments  # 4
-        _new_task_id = _task_id // self.num_fragments  # 2
-        pld.task_id = _new_task_id
-
-        pld = self.conv1[_module_index](pld)
-        pld = self.bn1[_module_index](pld)
-        pld = pld.forward_by(self.act1)
-        pld = self.layer1[_module_index](pld)
-        pld = self.layer2[_module_index](pld)
-        pld = self.layer3[_module_index](pld)
-        pld = self.layer4[_module_index](pld)
-        features = avg_pool2d(pld.data, 4)
-        features = features.view(features.size(0), -1)
+        features = []
+        for __e in range(self.num_ensembles):
+            _pld = deepcopy(pld)
+            _task_id = _pld.task_id  # 14
+            _module_index = _task_id % self.num_fragments + __e * self.num_fragments
+            _new_task_id = _task_id // self.num_fragments  # 2
+            _pld.task_id = _new_task_id
+            _pld = self.conv1[_module_index](_pld)
+            _pld = self.bn1[_module_index](_pld)
+            _pld = _pld.forward_by(self.act1)
+            _pld = self.layer1[_module_index](_pld)
+            _pld = self.layer2[_module_index](_pld)
+            _pld = self.layer3[_module_index](_pld)
+            _pld = self.layer4[_module_index](_pld)
+            _features = avg_pool2d(_pld.data, 4)
+            _features = _features.view(_features.size(0), -1)
+            features.append(_features)
+        # Take the average of the features
+        features = torch.stack(features, dim=0).mean(dim=0)
         return features
 
     def forward_head(self, features: torch.Tensor) -> torch.Tensor:
@@ -247,9 +257,11 @@ class HATResNet(nn.Module):
         return _reg / _cnt if _cnt > 0 else 0.0
 
 
-def HATSlimResNet18(n_classes, hat_config, nf=20, num_fragments=1):
-    return HATResNet(HATBasicBlock, [2, 2, 2, 2], n_classes, nf, hat_config,
-                     num_fragments)
+def HATSlimResNet18(n_classes, hat_config, nf=20, num_fragments=1,
+                    num_ensembles=1):
+    return HATResNet(HATBasicBlock, [2, 2, 2, 2], num_classes=n_classes,
+                     nf=nf, hat_config=hat_config,
+                     num_fragments=num_fragments, num_ensembles=num_ensembles)
 
 
 __all__ = ["HATResNet", "HATSlimResNet18"]
