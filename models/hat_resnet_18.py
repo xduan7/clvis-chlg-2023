@@ -235,26 +235,65 @@ class HATResNet(nn.Module):
     def get_hat_reg_term(self, task_id: int, mask_scale: float) -> torch.Tensor:
         from hat.modules import HATMasker
 
-        _module_index = task_id % self.num_fragments
+        _reg, _cnt = 0.0, 0
+        for __e in range(self.num_ensembles):
+            _module_index = task_id % self.num_fragments + __e * self.num_fragments
+            _new_task_id = task_id // self.num_fragments
+            for module in [
+                self.conv1[_module_index],
+                self.layer1[_module_index],
+                self.layer2[_module_index],
+                self.layer3[_module_index],
+                self.layer4[_module_index],
+            ]:
+                for __m in module.modules():
+                    if isinstance(__m, HATMasker):
+                        _reg += __m.get_reg_term(
+                            strat="uniform",
+                            task_id=_new_task_id,
+                            mask_scale=mask_scale,
+                        )
+                        _cnt += 1
+        return _reg / _cnt if _cnt > 0 else 0.0
+
+    @staticmethod
+    def _copy_weights(src_module: nn.Module, dst_module: nn.Module):
+        # Copy all the weights except for HATMasker
+        from hat.modules import HATMasker
+
+        src_dict = src_module.state_dict()
+        dst_dict = dst_module.state_dict()
+        # Find keys to exclude
+        keys_to_exclude = []
+        for __k, __m in src_module.named_modules():
+            if isinstance(__m, HATMasker):
+                for __pn in __m.state_dict():
+                    keys_to_exclude.append(f"{__k}.{__pn}")
+
+        for __k in src_dict:
+            if __k not in keys_to_exclude:
+                dst_dict[__k].copy_(src_dict[__k])
+
+        dst_module.load_state_dict(dst_dict)
+
+    def copy_weights_from_previous_fragment(self, task_id: int):
         _new_task_id = task_id // self.num_fragments
 
-        _reg, _cnt = 0.0, 0
-        for module in [
-            self.conv1[_module_index],
-            self.layer1[_module_index],
-            self.layer2[_module_index],
-            self.layer3[_module_index],
-            self.layer4[_module_index],
-        ]:
-            for __m in module.modules():
-                if isinstance(__m, HATMasker):
-                    _reg += __m.get_reg_term(
-                        strat="uniform",
-                        task_id=_new_task_id,
-                        mask_scale=mask_scale,
-                    )
-                    _cnt += 1
-        return _reg / _cnt if _cnt > 0 else 0.0
+        if _new_task_id != 0:
+            return
+
+        for __e in range(self.num_ensembles):
+            _module_index = task_id % self.num_fragments + __e * self.num_fragments
+            _prev_module_index = _module_index - 1
+
+            if _prev_module_index < 0:
+                continue
+
+            for __m in [self.conv1, self.bn1, self.layer1, self.layer2, self.layer3, self.layer4]:
+                self._copy_weights(
+                    src_module=__m[_prev_module_index],
+                    dst_module=__m[_module_index],
+                )
 
 
 def HATSlimResNet18(n_classes, hat_config, nf=20, num_fragments=1,

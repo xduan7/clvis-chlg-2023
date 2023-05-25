@@ -411,6 +411,8 @@ if __name__ == "__main__":
                 num_workers=args.num_workers,
             )
             rep.sync_replay_features(clf)
+            if model.num_fragments > 1:
+                model.copy_weights_from_previous_fragment(task_id=__exp.current_experience)
 
         print(
             f"Training done in {competition_plugins[0].time_spent:.2f} minutes."
@@ -813,6 +815,9 @@ if __name__ == "__main__":
 # TODO: On the learning rate scheduler
 
 # On the fragmentation of the model
-# `train(1)` is the reference
-# `train(2)` is fragment 4
-# `train(3)` is fragment 10
+# `train(1)` is the reference 44.07%
+# `train(2)` is fragment 4 44.6%
+# `train(3)` is fragment 10 42.69%
+# `train(4)` is fragment 2
+# `train(5)` is fragment 3
+# `train(6)` is fragment 5
