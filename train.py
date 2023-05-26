@@ -379,48 +379,40 @@ if __name__ == "__main__":
 
     # --- Training Loops
     # Check if there is a checkpoint to load
-    ckpt_dir_path = get_ckpt_dir_path(args)
-    print(f"ckpt_dir_path: {ckpt_dir_path}")
-    if clf.has_ckpt(ckpt_dir_path):
-        clf.load_ckpt(ckpt_dir_path)
-    else:
-        # Save a readable copy of the args for reference (with json)
-        with open(os.path.join(ckpt_dir_path, "args.json"), "w") as __f:
-            json.dump(vars(args), __f, indent=4)
+    # ckpt_dir_path = get_ckpt_dir_path(args)
+    # print(f"ckpt_dir_path: {ckpt_dir_path}")
+    # if clf.has_ckpt(ckpt_dir_path):
+    #     clf.load_ckpt(ckpt_dir_path)
+    # else:
+    #     # Save a readable copy of the args for reference (with json)
+    #     with open(os.path.join(ckpt_dir_path, "args.json"), "w") as __f:
+    #         json.dump(vars(args), __f, indent=4)
 
-        for __exp in benchmark.train_stream:
-            print(f"Training on experience {__exp.current_experience} ... ")
-            if model.num_fragments > 1:
-                model.copy_weights_from_previous_fragment(task_id=__exp.current_experience)
+    for __exp in benchmark.train_stream:
+        print(f"Training on experience {__exp.current_experience} ... ")
+        if model.num_fragments > 1:
+            model.copy_weights_from_previous_fragment(task_id=__exp.current_experience)
 
-            rep.train(
-                experiences=__exp,
-                num_workers=args.num_workers,
-            )
-            clf.train(
-                experiences=__exp,
-                num_workers=args.num_workers,
-            )
-            rep.sync_replay_features(clf)
-
-        print(
-            f"Training done in {competition_plugins[0].time_spent:.2f} minutes."
+        rep.train(
+            experiences=__exp,
+            num_workers=args.num_workers,
         )
-        clf.save_ckpt(ckpt_dir_path)
+        clf.train(
+            experiences=__exp,
+            num_workers=args.num_workers,
+        )
+        rep.sync_replay_features(clf)
+
+    print(
+        f"Training done in {competition_plugins[0].time_spent:.2f} minutes."
+    )
+        # clf.save_ckpt(ckpt_dir_path)
 
     # --- Make prediction on test-set samples
     # This is for testing purpose only.
     _final_acc = []
 
     _tst_dataset = benchmark.test_stream[0].dataset
-    # Get a fraction of the test-set of size 32
-    # _tst_dataset = benchmark.test_stream[0].dataset.subset(
-    #     indices=np.random.choice(
-    #         np.arange(len(benchmark.test_stream[0].dataset)),
-    #         size=64,
-    #         replace=False,
-    #     )
-    # )
     tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
         _tst_dataset,
         tst_time_aug=args.tst_time_aug,
@@ -429,384 +421,6 @@ if __name__ == "__main__":
         ignore_singular_exp=None,
         remove_extreme_logits=True,
     )
-    # _tst_config = [[1, 1], [18, 1], [18, 3]]
-    # for __tta, __num_exp in _tst_config:
-    #     print(f"Testing with tta = {__tta} and num_exp = {__num_exp} ...")
-    #     tst_targets, tst_predictions, tst_logits, tst_features = clf.predict(
-    #         _tst_dataset,
-    #         tst_time_aug=__tta,  # Should be `args.tst_time_aug`
-    #         num_exp=__num_exp,
-    #         exp_trn_acc_lower_bound=0.6,
-    #         ignore_singular_exp=True,
-    #         remove_extreme_logits=True,
-    #     )
 
     # Save predictions or print the results
-    import dill
-
-    with open("./data/challenge_test_labels.pkl", "rb") as __f:
-        tst_labels = dill.load(__f)
-
-    tst_labels = np.array(tst_labels)
-    __acc = np.mean(tst_predictions == tst_labels)
-    np.save(f"{args.run_name}.npy", tst_predictions)
-    # else:
-    #     __acc = np.mean(tst_predictions == tst_targets)
-    #
-    # print(f"Test-set accuracy: {__acc}")
-    # _final_acc.append(__acc)
-    #
-    # # Report NNI result
-    # try:
-    #     import nni
-    #
-    #     nni.report_final_result(np.max(_final_acc))
-    # except ImportError:
-    #     pass
-
-    # # Error analysis
-    # # Evaluate top-5 accuracy based on logits and targets
-    # top_5_acc = top_k_accuracy_score(
-    #     y_score=tst_logits,
-    #     y_true=tst_targets,
-    #     k=5,
-    # )
-    # print(f"Test-set top-5 accuracy: {top_5_acc}")
-    #
-    # # Plot the confusion matrix
-    # import matplotlib.pyplot as plt
-    # from sklearn.metrics import confusion_matrix
-    #
-    # plt.figure(figsize=(10, 10))
-    # plt.imshow(
-    #     confusion_matrix(
-    #         y_true=tst_targets,
-    #         y_pred=tst_predictions,
-    #     ),
-    #     cmap="Blues",
-    # )
-    # plt.xlabel("Predicted")
-    # plt.ylabel("True")
-    # plt.show()
-    #
-    # # Count the predictions occurrences
-    # import collections
-    #
-    # pred_counter = collections.Counter(tst_predictions)
-    # print(pred_counter)
-    #
-    # # Find patterns in mis-classifications
-    # cm = confusion_matrix(
-    #     y_true=tst_targets,
-    #     y_pred=tst_predictions,
-    # )
-    # cls_to_last_seen_exp = {}
-    # for __exp, __cls_in_exp in enumerate(clf.classes_in_experiences):
-    #     for __cls in __cls_in_exp:
-    #         cls_to_last_seen_exp[__cls] = __exp
-    # # Get the highest N values (could be on the diagonal)
-    # n = 50
-    # # Get the indices of the N highest values in the confusion matrix
-    # indices = np.argpartition(cm.ravel(), -n)[-n:]
-    # # Sort the indices
-    # indices = indices[np.argsort(-cm.ravel()[indices])]
-    # for __i in indices:
-    #     __r, __c = np.unravel_index(__i, cm.shape)
-    #     if __r != __c:
-    #         __re = cls_to_last_seen_exp[__r]
-    #         __ce = cls_to_last_seen_exp[__c]
-    #
-    #         __shared_exp_id = None
-    #
-    #         for __id, __exp in enumerate(benchmark.train_stream):
-    #             if (
-    #                 __r in __exp.classes_in_this_experience
-    #                 and __c in __exp.classes_in_this_experience
-    #             ):
-    #                 if __shared_exp_id is None:
-    #                     __shared_exp_id = [__id]
-    #                 else:
-    #                     __shared_exp_id.append(__id)
-    #
-    #         if __shared_exp_id is not None:
-    #             print(
-    #                 f"Class {__r} (last seen in {__re}) is "
-    #                 f"misclassified as {__c} (last seen in {__ce}) "
-    #                 f"{cm[__r, __c]} times "
-    #                 f"and they are in the same exp {__shared_exp_id}"
-    #             )
-    #         else:
-    #             print(
-    #                 f"Class {__r} (last seen in {__re}) is "
-    #                 f"misclassified as {__c} (last seen in {__ce}) "
-    #                 f"{cm[__r, __c]} times "
-    #                 f"and they are never in the same exp"
-    #             )
-
-# Note to self
-# These three experiments are all performed with the new cosine scaling
-# New scaling has a hard lower bound of 1.0
-
-# `train` is 20/20: 0.3003/0.3556
-# `train(1)` is 20/20 with lr decay during clf 0.2807/0.3283
-# `train(2)` is 10/20 with lr decay during clf: 0.2453
-
-# `train(3)` is 20/20 with rep batch size 64 0.2986/0.3418
-# `train(4)` is 20/20 with clf batch size 64 0.2889/0.3301
-# `train(5)` is 20/20 with rep batch size 64 and clf batch size 64 0.2939/0.337
-
-# the first instance on Kontrol is the replay with 2 samples that are
-# closest to the mean 0.0494
-# the second instance on Kontrol is the replay with 2 samples selected with
-# K-means 0.0629
-
-# `train(6)` is 20/20 is the replay with 2 samples that are closest to the
-#   mean with non augmented dataloader during replay sampling 0.0494
-# `train(7)` is 20/20 is the replay with 2 samples selected with K-means with
-#   non augmented dataloader during replay sampling 0.0629 <- this is the way
-
-# `train` is default to test out if anything is broken 0.3003/0.3558
-# `train(1)` is default with replay 0.299/0.3377
-
-# `train(2)` is default with amp 0.293/0.3398
-
-# `train(3)` is default on config 3 0.2388/0.2839
-# `train(4)` is default on config 3 with replay 0.2426/0.2952
-
-# TODO: nvidia apex
-# TODO: fuzzy replay
-# TODO: replay only when the number of samples is low
-
-# `train(5)` is default on config 1 with replay and resetting the last clf
-#   neuron between experiences 0.2992/0.3521
-# `train(6)` is default on config 3 with replay and resetting the last clf
-#   neuron between experiences and lower bound for replay 0.2442/0.2884
-# `train(7)` is default on config 3 with replay and resetting the last clf
-#   neuron between experiences and lower bound for replay and rand noise for
-#   replay logits 0.2396/0.2848
-
-# TODO: label smoothing
-# TODO: different optimizers (and arguments)
-
-# Everything below is trained with
-# (1) linear-scaled decreasing regularization factor
-# (2) number of replay sample of 8 in any batch
-# (3) all the tricks from the post on how to accelerate training
-
-# Config 1
-# +-----------+-------------+-------------+----------------+-----------------+
-# |           | rep_replay  | clf_replay  | clf_freeze_bb  | acc
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train     | false       | false       | false          | 0.3068/0.3552
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(1)  | false       | true        | false          | 0.3116/0.3609
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(8)  | true        | true        | false          |
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(3)  | false       | true        | true           | 0.2969/0.3437
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(9)  | true        | true        | true           |
-# +-----------+-------------+-------------+----------------+-----------------+
-
-
-# Config 3
-# +-----------+-------------+-------------+----------------+-----------------+
-# |           | rep_replay  | clf_replay  | clf_freeze_bb  | acc
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(4)  | false       | false       | false          | 0.2361/0.2840
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(5)  | false       | true        | false          | 0.2519/0.3022
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(10) | true        | true        | false          |
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(7)  | false       | true        | true           | 0.2513/0.3020
-# +-----------+-------------+-------------+----------------+-----------------+
-# | train(11) | true        | true        | true           |
-# +-----------+-------------+-------------+----------------+-----------------+
-
-
-# On the topic of optimizers and learning rate
-# Config 1
-# +-----------------+----------+----------+-----------------+
-# | optimizer       | rep_lr   | clr_lr   | acc             |
-# +-----------------+----------+----------+-----------------+
-# | Adam            | 0.01     | 0.001    | 0.3046/0.3598   |
-# +-----------------+----------+----------+-----------------+
-# | Adam            | 0.02     | 0.002    | 0.2818/0.3317   |
-# +-----------------+----------+----------+-----------------+
-# | Adam (amsgrad)  | 0.01     | 0.001    | 0.3073/0.3615   |
-# +-----------------+----------+----------+-----------------+
-# | Adam (amsgrad)  | 0.012    | 0.0012   | 0.3033/0.3563   |
-# +-----------------+----------+----------+-----------------+
-# | SGD (mmt=0.9)   | 0.01     | 0.001    | 0.2588/0.2873   |
-# +-----------------+----------+----------+-----------------+
-# | SGD (mmt=0.9)   | 0.02     | 0.002    | 0.2736/0.3148   |
-# +-----------------+----------+----------+-----------------+
-# | SGD (mmt=0.9)   | 0.04     | 0.004    | 0.2879/0.3323   |
-# +-----------------+----------+----------+-----------------+
-# | SGD (mmt=0.9)   | 0.08     | 0.008    | 0.2900/0.3359   |
-# +-----------------+----------+----------+-----------------+
-# | SGD (mmt=0.9)   | 0.10     | 0.010    | 0.2739/0.3221   |
-# +-----------------+----------+----------+-----------------+
-# | LARS (mmt=0.9)  | 0.01     | 0.001    | 0.2588/0.2873   |
-# +-----------------+----------+----------+-----------------+
-# | LARS (mmt=0.9)  | 0.02     | 0.002    | 0.2736/0.3148   |
-# +-----------------+----------+----------+-----------------+
-# | LARS (mmt=0.9)  | 0.04     | 0.004    | 0.2879/0.3323   |
-# +-----------------+----------+----------+-----------------+
-
-# On the topic of hat regularization factor
-# Config 1
-# 0 replay samples per batch for both rep and clf
-# +----------------------------+-----------------+
-# | rep_hat_reg_base_factor    | acc             |
-# +----------------------------+-----------------+
-# | 0.90                       | 0.3067/0.3603   |
-# +----------------------------+-----------------+
-# | 0.85                       | 0.3127/0.3646   |
-# +----------------------------+-----------------+
-# | 0.80                       | 0.3127/0.3736   |
-# +----------------------------+-----------------+
-# | 0.75                       | 0.3136/0.3585   |
-# +----------------------------+-----------------+
-# | 0.70                       | 0.3174/0.3602   |
-# +----------------------------+-----------------+
-# | 0.65                       | 0.3122/0.3605   |
-# +----------------------------+-----------------+
-
-# On the topic of number of replay samples per batch in clf
-# Config 3
-# +-------------------------------------+-----------------+
-# | clf_num_replay_samples_per_batch    | acc             |
-# +-------------------------------------+-----------------+
-# | 0                                   | 0.2338/0.2773   |
-# +-------------------------------------+-----------------+
-# | 2                                   | 0.2448/0.2874   |
-# +-------------------------------------+-----------------+
-# | 4                                   | 0.2422/0.2888   |
-# +-------------------------------------+-----------------+
-# | 8                                   | 0.2431/0.2814   |
-# +-------------------------------------+-----------------+
-# | 12                                  | 0.2495/0.2914   |
-# +-------------------------------------+-----------------+
-# | 16                                  | 0.2346/0.2820   |
-# +-------------------------------------+-----------------+
-# | 20                                  | 0.2425/0.2855   |
-# +-------------------------------------+-----------------+
-# | 24                                  | 0.2265/0.2742   |
-# +-------------------------------------+-----------------+
-# | 32                                  | 0.2421/0.2892   |
-# +-------------------------------------+-----------------+
-
-# `train` is the rep with replay samples of 8 (working by drastically
-# decreasing the hat reg factor). NOT WORKING.
-
-# On the topic of number of epochs and training time
-# Config 3 with 12 replay samples without enrichment factor.
-# +-----------------+-----------------+
-# | num_epochs      | acc             |
-# +-----------------+-----------------+
-# | 20              | 0.2335/0.2780   | train(1)
-# +-----------------+-----------------+
-# | 25              | 0.2428/0.2942   | train(2)
-# +-----------------+-----------------+
-# | 30              | 0.2436/0.2997   | train(3)
-# +-----------------+-----------------+
-# | 35              | 0.2396/0.2936   | train(4)
-# +-----------------+-----------------+
-# | 40              | 0.2217/0.2792   | train(5)
-# +-----------------+-----------------+
-# | 45              | 0.2290/0.2941   | train(6)
-# +-----------------+-----------------+
-
-# Another thing about more epochs is that, the mask regularization is more
-# potent. I'm not sure how this impacts the performance of the model, but if
-# I have to guess, it's probably not good.
-
-# `train` is the rep default with **0.5 hat reg
-# `train(1) is the rep with 1 hat reg
-# `train(2) is the rep with 1 hat reg with frozen hat during clf
-# `train(3) is the rep with 1 hat reg with drop_last=False
-
-# TODO: different learning rate for clf backbone and clf head
-# TODO: check the RAM and GPU memory usage (especially during inference)
-
-# `train` non reference 0.282/0.3164
-# `train(1)` batch norm (the right way) 0.2728/0.3254
-# `train(2)` temp 0.284/0.3272
-# `train(3)` batch norm (the right way but not during training)
-# `train(4)` norm 0.1652/0.1901
-# `train(5)` norm (not in training) 0.2779/0.3222
-# `train(6)` batch norm (the wrong way) 0.33/0.39
-
-# TODO: investigate embedding augmentation
-# TODO: investigate num replay samples (inversed ratio w.r.t. the number of
-#  classes in the experience)
-
-# `train(6) is increasing the replay samples to match the ratio
-# `train(7) is increasing the replay samples to match the ratio with
-# embedding augmentation
-
-# TODO: rerun the hparam test
-# train is the default kmeans with the trial hparams on config 1
-# train(1) is the sampled kmeans with the trial hparams on config 1
-# train(4) is the sampled kmeans with the trial hparams on config 2
-# train(3) is the sampled kmeans with the trial hparams on config 3
-
-# Collect replay_features_and_logits
-# train(4) is config 2  0.291
-# train(5) is config 3  0.2674
-# train(6) is config 1  0.3261
-
-# Test the effect of augmented embedding
-# train(7) is config 3 with augmented embedding 0.2645
-
-# Label smoothing
-# train(8) is config 3 with label smoothing (normal replay embeddings)
-# 0.2606/??
-
-# Logit regularization
-# train(9) is config 3 with logit regularization (normal replay embeddings)
-# 0.2701/
-
-# Embedding regularization
-# `train` is the reference 0.2818
-# `train(1)` is factor = 1, p=2  0.1091
-# `train(2)` is factor = 0.2, p=2 0.1881
-# `train(3)` is factor = 0.04, p=2 0.2583
-
-# Reference
-# `train_hparam` is config 1 (benchmark) 0.2983/0.3564
-# `train_hparam(2) is config 1 (not benchmark) 0.2946/0.3522
-
-# Rep replay
-# `train_hparam_rep_replay` is config 1 with rep replay samples 8 and the
-# factor of 1 (with tta and momentum) 0.3967
-# For reference
-# `train_hparam(1)` is config 1 with tta and momentum 0.4347
-# `train_hparam(2)` is config 1 with tta without momentum 0.4045
-
-# On data augmentation
-# `train_hparam` is without grey scale in rep 0.4407
-# `train_hparam(1)` is with doubled color jitter in rep 0.4199
-# `train_hparam(2)` is with scale=(0.2, 1.0) in clf 0.4255
-
-# On the logit/embedding regularization
-# `train_hparam(3)` is rep embedding 4 samples 0.1 factor
-# `train_hparam(4)` is clf logits degree 1 0.1 factor
-# `train_hparam(5)` is clf logits degree 2 0.1 factor
-
-# TODO: On the learning rate scheduler
-
-# On the fragmentation of the model
-# `train(1)` is the reference 44.07%
-# `train(2)` is fragment 4 44.6%
-# `train(3)` is fragment 10 42.69%
-# `train(4)` is fragment 2 42.86%
-# `train(5)` is fragment 3 42.72%
-# `train(6)` is fragment 5 42.49%
-# `train(7)` is fragment 50 with weight transferring
-# `train(9)` is fragment 50 with fixed weight transferring
-
-# On the submission
-# `train(8)` is the reference for submission
+    np.save(f"pred_{args.config_file.split('.')[0]}_{args.run_name}.npy", tst_predictions)

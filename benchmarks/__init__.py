@@ -11,7 +11,7 @@ from .cir_benchmark import generate_benchmark
 
 def get_cifar_based_benchmark(scenario_config_file, seed):
     # Load scenario config
-    with open(scenario_config_file, "rb") as pkl_file:
+    with open(f"./scenario_configs/{scenario_config_file}", "rb") as pkl_file:
         scenario_config = dill.load(pkl_file)
 
     # Download dataset if not available

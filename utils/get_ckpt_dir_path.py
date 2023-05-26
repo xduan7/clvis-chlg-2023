@@ -2,8 +2,6 @@ import hashlib
 import json
 import os
 
-import nni
-
 
 def get_ckpt_dir_path(args) -> str:
     # if nni.get_experiment_id() == "STANDALONE":

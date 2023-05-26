@@ -747,7 +747,7 @@ class Classification(BaseStrategy):
                             _cls = list(sorted(__classes_in_exp.get(i, [])))
                             if len(_cls) > 0:
                                 if (__exp_id, i) not in _cbn_layers:
-                                    _cbn_layers[(__exp_id, i)] = CumulativeBatchNorm1d(len(_cls)).to(self.device)
+                                    _cbn_layers[(__exp_id, i)] = CumulativeBatchNorm1d(len(_cls)).to(self.device) if self.logit_calibr == "batchnorm" else nn.Identity()
                                 _logit_norm_clf = _cbn_layers[(__exp_id, i)]
 
                                 __logits = self.momentum_heads[i](__features)
