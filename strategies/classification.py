@@ -688,7 +688,7 @@ class Classification(BaseStrategy):
                 _last_seen_exp_to_cls[__exp] = []
             _last_seen_exp_to_cls[__exp].append(__cld)
 
-        _exp_to_n_last_seen = {exp:{} for exp in range(50)} # exp: {history_step: cls}
+        _exp_to_n_last_seen = {exp:{} for exp in range(n_exps)} # exp: {history_step: cls}
         for cls, exps in _cls_to_all_last_seen_exp.items():
             exps = reversed(exps[-self.num_momentum:])
             for i, exp in enumerate(exps):
@@ -699,7 +699,7 @@ class Classification(BaseStrategy):
         _tst_features = torch.zeros(
             tst_time_aug,
             len(_tst_dataset),
-            160,
+            self.model.linear.in_features,
             device=self.device,
         )
         _tst_logits = torch.zeros(
@@ -864,7 +864,7 @@ class Classification(BaseStrategy):
         _tst_features = torch.zeros(
             tst_time_aug,
             len(_tst_dataset),
-            160,
+            self.model.linear.in_features,
             device=self.device,
         )
         _tst_logits = torch.zeros(

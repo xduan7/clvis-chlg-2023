@@ -293,6 +293,7 @@ if __name__ == "__main__":
         )
         model = HATSlimResNet18(
             n_classes=num_classes,
+            nf=20,
             hat_config=hat_config,
             num_fragments=args.hat_num_fragments,
             num_ensembles=args.hat_num_ensembles,
@@ -325,7 +326,7 @@ if __name__ == "__main__":
     competition_plugins = [
         # GPUMemoryChecker(max_allowed=4000, device=device),
         # RAMChecker(max_allowed=4000),
-        TimeChecker(max_allowed=500)
+        TimeChecker()
     ]
 
     # --- Your Plugins
@@ -424,3 +425,40 @@ if __name__ == "__main__":
 
     # Save predictions or print the results
     np.save(f"pred_{args.config_file.split('.')[0]}_{args.run_name}.npy", tst_predictions)
+
+    import dill
+
+    # with open("./data/challenge_test_labels.pkl", "rb") as __f:
+    #     tst_labels = dill.load(__f)
+    # tst_labels = np.array(tst_labels)
+
+    tst_labels = np.load("./data/GT_test.npy")
+
+    __acc = np.mean(tst_predictions == tst_labels)
+    print(f"Accuracy: {__acc:.4f}")
+    #np.save(f"{args.run_name}.npy", tst_predictions)
+
+
+# Reference
+# 1 * 1 -> 41.81%
+# 1 * 2 -> 47.83%
+# 10 * 1 -> 48.20%
+# 50 * 2 -> 68.04% (< 500 minutes)
+
+# train(1) is with 20 replay embeddings per class 43.64%
+# train(2) is with 100 replay embeddings per class 42.70% K-means
+
+# train(3) is with nf=40  49.36%
+# train(4) is with nf=200 57.60% (1095.94 minutes)
+# train(5) is with nf=400 58.97% (3293.63 minutes)
+
+# train(6) is with old HAT 27.83% (normal mask init + linear mask scaling)
+
+# train_ablation(1) is without TTA 37.05%
+# train_ablation(2) is without momentum 39.39%
+# train_ablation(3) is without TTA and momentum 33.78%
+
+# train_ablation(4) is without logit calibration/normalization 37.72%
+
+# TODO:
+# no replay  43.05%

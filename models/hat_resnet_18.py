@@ -3,6 +3,7 @@ from copy import deepcopy
 
 import torch
 import torch.nn as nn
+from math import ceil
 from torch.nn.functional import avg_pool2d
 
 from hat import HATPayload, HATConfig
@@ -109,10 +110,12 @@ class HATResNet(nn.Module):
         self.hat_config = hat_config
         self.num_fragments = num_fragments
         self.num_ensembles = num_ensembles
+        self.num_tasks_per_fragment = ceil(hat_config.num_tasks / num_fragments)
+        # assert self.num_tasks_per_fragment * num_fragments == hat_config.num_tasks
 
         # Split the num_tasks by num_fragments
-        __c, __r = divmod(hat_config.num_tasks, num_fragments)
-        self.num_tasks = [__c + 1] * __r + [__c] * (num_fragments - __r)
+        # __c, __r = divmod(hat_config.num_tasks, num_fragments)
+        self.num_tasks = [self.num_tasks_per_fragment] * num_fragments
         self.hat_configs = []
         for __num_tasks in self.num_tasks:
             self.hat_configs.append(
@@ -207,8 +210,8 @@ class HATResNet(nn.Module):
         for __e in range(self.num_ensembles):
             _pld = deepcopy(pld)
             _task_id = _pld.task_id  # 14
-            _module_index = _task_id % self.num_fragments + __e * self.num_fragments
-            _new_task_id = _task_id // self.num_fragments  # 2
+            _module_index = _task_id // self.num_tasks_per_fragment + __e * self.num_fragments
+            _new_task_id = _task_id % self.num_tasks_per_fragment  # 2
             _pld.task_id = _new_task_id
             _pld = self.conv1[_module_index](_pld)
             _pld = self.bn1[_module_index](_pld)
@@ -237,8 +240,8 @@ class HATResNet(nn.Module):
 
         _reg, _cnt = 0.0, 0
         for __e in range(self.num_ensembles):
-            _module_index = task_id % self.num_fragments + __e * self.num_fragments
-            _new_task_id = task_id // self.num_fragments
+            _module_index = task_id // self.num_tasks_per_fragment + __e * self.num_fragments
+            _new_task_id = task_id % self.num_tasks_per_fragment
             for module in [
                 self.conv1[_module_index],
                 self.layer1[_module_index],
@@ -277,13 +280,13 @@ class HATResNet(nn.Module):
         dst_module.load_state_dict(dst_dict)
 
     def copy_weights_from_previous_fragment(self, task_id: int):
-        _new_task_id = task_id // self.num_fragments
+        _new_task_id = task_id % self.num_tasks_per_fragment
 
         if _new_task_id != 0:
             return
 
         for __e in range(self.num_ensembles):
-            _module_index = task_id % self.num_fragments + __e * self.num_fragments
+            _module_index = task_id // self.num_tasks_per_fragment + __e * self.num_fragments
             _prev_module_index = _module_index - 1
 
             if _prev_module_index < 0:

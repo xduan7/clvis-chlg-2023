@@ -1,32 +1,35 @@
-Our method is based on HAT (hard attention to the task). 
+Our method combines the strengths of Hard Attention to the Task (HAT) and Supervised Contrastive Learning, both tailored to the Class-incremental with Repetition (CIR) setting.
 
-Essentially, the hard attention partitions the network into different segments, reserved for different experiences, and therefore prevents catastrophic forgetting.
-For each experience, our training consists of two phases: (1) representation learning phase using supervised contrastive learning, and (2) classification learning phase, where the network only learns the current classes in the experience, with an additional logit for out-of-experience classification (for replayed embeddings).
+Essentially, we partition the network based on the experience ID using trainable hard (binary) masks. This enables us to selectively update only the network's parameters associated with the current experience during backpropagation, mitigating catastrophic forgetting.
 
-During the prediction, for each class, we use the logits from the last experience(s) where the class is seen.
-The network automatically preserves the momentum from the last experience(s) to further improve performance.
+The original HAT suffers from the cases where the number of experiences is large. To address this issue, we propose a different way to initialize the hard attention masks and align the gradients, so that the training process is more stable and closer to non-HAT training. 
 
-Without any buffer, module list containing weight parameters, or anything else for model replicas, our method achieves an average accuracy of 41.2% on configurations 1, 2, and 3 with the total number of 5,338,604 parameters, which yields a 5.863MB model (takes 1200MB GPU memory during training).
+## Single Model Training
 
+Training for each experience is divided into two stages:
 
-To run the model
-```bash
-python train.py --cuda 0 --config_file config_s1.pkl --run_name c1 --hat --hat_grad_comp_factor 100 --hat_reg_decay_exp 0.5 --hat_reg_enrich_ratio -1.4 --rep_num_epochs 28 --rep_lr 0.0072 --rep_batch_size 64 --rep_hat_reg_base_factor 1.3 --rep_proj_head_dim 256 --rep_num_replay_samples_per_batch 32 --rep_proj_div_factor 0.025 --clf_num_epochs 48 --clf_lr 0.00085 --clf_batch_size 32 --clf_hat_reg_base_factor 2.0 --clf_freeze_hat --clf_num_replay_samples_per_batch 16 --clf_logit_reg_factor 0.02 --clf_logit_reg_degree 2 --clf_logit_calibr batchnorm --clf_train_exp_logits_only --tst_time_aug 18 --clf_use_momentum
-```
+1. Representation learning: Supervised Contrastive Learning is utilized to learn a good data representation where images from the same classes are close and images from different classes are far away from each other. 
+2. Classification learning: During this phase, we focus only on the classes present in the current experience for classification. An additional logit is introduced to the network for all replayed classes. Normalization is applied to scale the logits, ensuring that logits from different experiences share a consistent scale.
 
-The training with replicas takes about 300 minutes on NVIDIA V100. 
-The hyperparameters slightly different from the ones we used during the first phase of the challenge.
+Our single model training produces an averaged accuracy of 40.19% on configuration 1, 2 and 3.
 
 
-We have not realized that replicas of models are allowed since it essentially changed the number of trainable parameters. However, we made some last-minute changes and added options for model replicas.
+## Training with replicas
 
-There are two types of replicas, (1) is to fragment the model into N different versions, which will handle different experiences separately; (2) is the ensemble of the models: there are multiple models for the same experience, and their predictive results will be averaged together during the test.
+The training process for each experience is the same as the single model training. The only difference is how model replicas are assigned to different experiences. We have two approaches:
+1. Different models for different experiences (fragments): In this case, each model is trained on roughly equal number of experiences. For instance, given 10 experiences and 5 models, each model is trained on 2 experiences, i.e., the first model is trained on experiences 0 and 1, the second on 2 and 3, and so on. Even though models' weights are not shared, they are initialized from the preceding model, if available, promoting knowledge transfer.
+2. Different models on the same experiences (ensembles). This strategy complements the first. For each experience, we train a set of M independent models simultaneously.
 
-Both options seem to increase the performance.
+Here are the results for the two approaches on configuration 5:
 
-To run the model with replicas (50 fragments, 2 ensembles)
-```bash
-python train.py --cuda 0 --config_file config_s1.pkl --run_name c1 --hat --hat_num_fragments 50 --hat_num_ensembles 2 --hat_grad_comp_factor 100 --hat_reg_decay_exp 0.5 --hat_reg_enrich_ratio -1.4 --rep_num_epochs 28 --rep_lr 0.0072 --rep_batch_size 64 --rep_hat_reg_base_factor 1.3 --rep_proj_head_dim 256 --rep_num_replay_samples_per_batch 32 --rep_proj_div_factor 0.025 --clf_num_epochs 48 --clf_lr 0.00085 --clf_batch_size 32 --clf_hat_reg_base_factor 2.0 --clf_freeze_hat --clf_num_replay_samples_per_batch 16 --clf_logit_reg_factor 0.02 --clf_logit_reg_degree 2 --clf_logit_calibr batchnorm --clf_train_exp_logits_only --tst_time_aug 18 --clf_use_momentum --num
-```
+| # fragments |  # ensembles | Accuracy |  Accuracy change |
+|-------------|--------------|----------|------------------|
+|      1      |      1       |  42.77%  | baseline         |
+|     10      |      1       |  48.20%  | + 5.43%          |
+|     25      |      1       |  55.74%  | +12.97%          |
+|     50      |      1       |  65.57%  | +22.80%          |
+|     50      |      2       |  68.04%  | +25.27%          |
 
-The training with replicas takes about 450 minutes on NVIDIA V100.
+## Testing
+
+Given that the experience ID forms part of the input for HAT networks, it's necessary to test the model across multiple experiences to retrieve logits for all classes. To augment predictions, we also incorporate logits from earlier experiences. As a result, each class has multiple logits from different experiences. We compute the final prediction by taking the weighted average of these logits.

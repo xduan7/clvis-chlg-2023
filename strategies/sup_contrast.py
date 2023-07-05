@@ -253,7 +253,10 @@ class SupContrast(BaseStrategy):
         self._construct_replay_tensors()
 
         _base_model = super().model_adaptation(model=model)
-        _proj_head = nn.Linear(160, self.proj_head_dim).to(self.device)
+        _proj_head = nn.Linear(
+            self.model.linear.in_features,
+            self.proj_head_dim,
+        ).to(self.device)
         _base_model = self.model
 
         return nn.ModuleDict(
@@ -293,7 +296,7 @@ class SupContrast(BaseStrategy):
                     nn.functional.normalize(_features, dim=-1, eps=1e-8),
                     nn.functional.normalize(__replay_features, dim=-1, eps=1e-8).t()
                 ).mean()
-                self.loss = - self.proj_div_factor * _sim
+                self.loss = self.proj_div_factor * _sim
             _proj = self.model.proj_head(_features)
             # Reshape from [2*bsz, proj_head_dim] to [bsz, 2, proj_head_dim]
             _proj = _proj.view(2, len(self.mb_y), -1).swapaxes(0, 1)

@@ -20,7 +20,7 @@ class DatasetWithTsfm(Dataset):
         img_tsfm=None,
         trgt_tsfm=None,
     ):
-        self.dataset = dataset
+        self.dataset = [list(__i) for __i in dataset]
         self.img_tsfm = img_tsfm
         self.trgt_tsfm = trgt_tsfm
 
