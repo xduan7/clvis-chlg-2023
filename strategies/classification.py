@@ -146,9 +146,9 @@ class Classification(BaseStrategy):
         hat_reg_base_factor: float,
         hat_reg_decay_exp: float,
         hat_reg_enrich_ratio: float,
-        num_replay_samples_per_batch: int,
-        logit_reg_factor: float,
-        logit_reg_degree: float,
+        # num_replay_samples_per_batch: int,
+        # logit_reg_factor: float,
+        # logit_reg_degree: float,
         device: torch.device,
         freeze_hat: bool,
         freeze_backbone: bool,
@@ -167,7 +167,7 @@ class Classification(BaseStrategy):
             hat_reg_base_factor=hat_reg_base_factor,
             hat_reg_decay_exp=hat_reg_decay_exp,
             hat_reg_enrich_ratio=hat_reg_enrich_ratio,
-            num_replay_samples_per_batch=num_replay_samples_per_batch,
+            # num_replay_samples_per_batch=num_replay_samples_per_batch,
             device=device,
             plugins=plugins,
             verbose=verbose,
@@ -176,8 +176,8 @@ class Classification(BaseStrategy):
         self.freeze_backbone = freeze_backbone
         self.train_exp_logits_only = train_exp_logits_only
         self.logit_calibr = logit_calibr
-        self.logit_reg_factor = logit_reg_factor
-        self.logit_reg_degree = logit_reg_degree
+        # self.logit_reg_factor = logit_reg_factor
+        # self.logit_reg_degree = logit_reg_degree
 
         self.lr_scheduler = None
         self.classes_in_experiences = []
@@ -208,9 +208,6 @@ class Classification(BaseStrategy):
 
         # TODO: I don't need to copy weights here, I just need 3 copies of the linear head of the correct shape
         self.momentum_heads = nn.ModuleList([deepcopy(self.model.linear) for _ in range(self.num_momentum)])
-
-        # FIXME: experimental only; remove this for production
-        self.replay_features_and_logits = {}
 
     # TODO: different learning rates for backbone and head
     # TODO: rotated head
@@ -304,15 +301,16 @@ class Classification(BaseStrategy):
             self.experience.classes_in_this_experience
         )
 
-        if self.replay and self.train_exp_logits_only:
-            self.classes_trained_in_this_experience = (
-                self.classes_in_experiences[-1] + [100]
-            )
-            # Reset the last neuron of the classifier head
-            __bound = 1 / math.sqrt(_model.linear.weight.size(1))
-            self.model.linear.weight.data[-1, :].uniform_(-__bound, __bound)
-            self.model.linear.bias.data[-1] = 0
-        elif self.train_exp_logits_only:
+        # if self.replay and self.train_exp_logits_only:
+        #     self.classes_trained_in_this_experience = (
+        #         self.classes_in_experiences[-1] + [100]
+        #     )
+        #     # Reset the last neuron of the classifier head
+        #     __bound = 1 / math.sqrt(_model.linear.weight.size(1))
+        #     self.model.linear.weight.data[-1, :].uniform_(-__bound, __bound)
+        #     self.model.linear.bias.data[-1] = 0
+        # elif self.train_exp_logits_only:
+        if self.train_exp_logits_only:
             self.classes_trained_in_this_experience = \
                 self.classes_in_experiences[-1]
         else:
@@ -368,13 +366,13 @@ class Classification(BaseStrategy):
                     self.num_classes_trained_in_this_experience,
                 ).to(self.device, non_blocking=True)
             )
-        self._del_replay_features(self.classes_in_experiences[-1])
-        if self.train_exp_logits_only:
-            self._construct_replay_tensors(
-                target=self.num_classes_trained_in_this_experience - 1
-            )
-        else:
-            self._construct_replay_tensors()
+        # self._del_replay_features(self.classes_in_experiences[-1])
+        # if self.train_exp_logits_only:
+        #     self._construct_replay_tensors(
+        #         target=self.num_classes_trained_in_this_experience - 1
+        #     )
+        # else:
+        #     self._construct_replay_tensors()
         return _model
 
     def make_optimizer(self):
@@ -434,34 +432,34 @@ class Classification(BaseStrategy):
                 self.mb_output = (self.mb_output - __mean) / __std
 
             # Add replay samples here ..
-            __replay_features, __replay_targets, __replay_logits = \
-                self._get_replay_samples()
-            if __replay_features is not None:
-                __logits = self.model.forward_head(
-                    __replay_features)
-                __trained_logits = __logits[
-                    :, self.classes_trained_in_this_experience
-                ]
-                self.mb_output = torch.cat(
-                    [self.mb_output, __trained_logits], dim=0
-                )
-                self.mbatch = (
-                    self.mbatch[0],
-                    torch.cat([self.mb_y, __replay_targets], dim=0),
-                    self.mbatch[2],
-                )
-                self.loss += self.logit_reg_factor * torch.dist(
-                    __logits[:100],
-                    __replay_logits[:100],
-                    p=self.logit_reg_degree,
-                )
-                # Add pair wise distances of embeddings between the replay
-                # samples and the current samples to the loss
-                # self.loss += self.emb_div_factor * torch.cdist(
-                #     __replay_features,
-                #     _features,
-                #     p=self.emb_div_degree,
-                # ).mean()
+            # __replay_features, __replay_targets, __replay_logits = \
+            #     self._get_replay_samples()
+            # if __replay_features is not None:
+            #     __logits = self.model.forward_head(
+            #         __replay_features)
+            #     __trained_logits = __logits[
+            #         :, self.classes_trained_in_this_experience
+            #     ]
+            #     self.mb_output = torch.cat(
+            #         [self.mb_output, __trained_logits], dim=0
+            #     )
+            #     self.mbatch = (
+            #         self.mbatch[0],
+            #         torch.cat([self.mb_y, __replay_targets], dim=0),
+            #         self.mbatch[2],
+            #     )
+            #     self.loss += self.logit_reg_factor * torch.dist(
+            #         __logits[:100],
+            #         __replay_logits[:100],
+            #         p=self.logit_reg_degree,
+            #     )
+            #     # Add pair wise distances of embeddings between the replay
+            #     # samples and the current samples to the loss
+            #     # self.loss += self.emb_div_factor * torch.cdist(
+            #     #     __replay_features,
+            #     #     _features,
+            #     #     p=self.emb_div_degree,
+            #     # ).mean()
 
             self._after_forward(**kwargs)
 
@@ -505,54 +503,54 @@ class Classification(BaseStrategy):
         elif self.logit_calibr == "norm":
             self._calculate_logit_norm(num_epochs=norm_scale_num_epochs)
 
-        self._collect_replay_samples()
+        # self._collect_replay_samples()
         # Record the accuracy on the training set (in a hacky way)
         self.trn_acc.append(self.plugins[1].metrics[0]._metric.result())
         super()._after_training_exp(**kwargs)
 
-    def _collect_replay_samples(self):
-        self.model.eval()
-        # No augmentation for replay samples
-        _dataset = self.adapted_dataset.replace_current_transform_group(
-            (_tsfm, None)
-        )
-        _dataloader = DataLoader(
-            _dataset,
-            batch_size=self.train_mb_size * 2,
-            shuffle=False,
-            num_workers=8,
-            pin_memory=(self.device.type == "cuda"),
-            persistent_workers=False,
-            collate_fn=_clf_collate_fn,
-        )
-
-        _features, _targets = [], []
-        with torch.no_grad():
-            for __images, __targets, _ in _dataloader:
-                __images = __images.to(device=self.device, non_blocking=True)
-                __targets = __targets.to(device=self.device, non_blocking=True)
-                __features = self.forward_(
-                    model=self.model,
-                    images=__images,
-                    return_features=True,
-                    mask_scale=self.hat_config.max_trn_mask_scale,
-                )
-                _features.append(__features)
-                _targets.append(__targets)
-
-        # Select two representative samples per class
-        _features = torch.cat(_features).detach()
-        _targets = torch.cat(_targets).detach()
-
-        # _class_feature_means = []
-        for __c in self.classes_in_experiences[-1]:
-            __class_features = _features[_targets == __c]
-
-            # Use K means to find representative samples
-            self.replay_features[__c] = _k_means(
-                __class_features,
-                num_clusters=self.num_replay_samples_per_class,
-            )
+    # def _collect_replay_samples(self):
+    #     self.model.eval()
+    #     # No augmentation for replay samples
+    #     _dataset = self.adapted_dataset.replace_current_transform_group(
+    #         (_tsfm, None)
+    #     )
+    #     _dataloader = DataLoader(
+    #         _dataset,
+    #         batch_size=self.train_mb_size * 2,
+    #         shuffle=False,
+    #         num_workers=8,
+    #         pin_memory=(self.device.type == "cuda"),
+    #         persistent_workers=False,
+    #         collate_fn=_clf_collate_fn,
+    #     )
+    #
+    #     _features, _targets = [], []
+    #     with torch.no_grad():
+    #         for __images, __targets, _ in _dataloader:
+    #             __images = __images.to(device=self.device, non_blocking=True)
+    #             __targets = __targets.to(device=self.device, non_blocking=True)
+    #             __features = self.forward_(
+    #                 model=self.model,
+    #                 images=__images,
+    #                 return_features=True,
+    #                 mask_scale=self.hat_config.max_trn_mask_scale,
+    #             )
+    #             _features.append(__features)
+    #             _targets.append(__targets)
+    #
+    #     # Select two representative samples per class
+    #     _features = torch.cat(_features).detach()
+    #     _targets = torch.cat(_targets).detach()
+    #
+    #     # _class_feature_means = []
+    #     for __c in self.classes_in_experiences[-1]:
+    #         __class_features = _features[_targets == __c]
+    #
+    #         # Use K means to find representative samples
+    #         self.replay_features[__c] = _k_means(
+    #             __class_features,
+    #             num_clusters=self.num_replay_samples_per_class,
+    #         )
 
     def _train_logit_temp(self, num_epochs=1):
         self.model.eval()
@@ -989,10 +987,10 @@ class Classification(BaseStrategy):
                 ckpt_dir_path, "clf_classes_trained_in_experiences.pth"
             ),
         )
-        torch.save(
-            self.replay_features,
-            os.path.join(ckpt_dir_path, "clf_replay_features.pth"),
-        )
+        # torch.save(
+        #     self.replay_features,
+        #     os.path.join(ckpt_dir_path, "clf_replay_features.pth"),
+        # )
 
     def load_ckpt(self, ckpt_dir_path: str):
         self.model = torch.load(
@@ -1018,11 +1016,11 @@ class Classification(BaseStrategy):
                 ckpt_dir_path, "clf_classes_trained_in_experiences.pth"
             )
         )
-        _replay_features = torch.load(
-            os.path.join(ckpt_dir_path, "clf_replay_features.pth")
-        )
-        for __c, (__mean, __std) in _replay_features.items():
-            self.replay_features[__c] = (
-                __mean.to(self.device),
-                __std.to(self.device)
-            )
+        # _replay_features = torch.load(
+        #     os.path.join(ckpt_dir_path, "clf_replay_features.pth")
+        # )
+        # for __c, (__mean, __std) in _replay_features.items():
+        #     self.replay_features[__c] = (
+        #         __mean.to(self.device),
+        #         __std.to(self.device)
+        #     )

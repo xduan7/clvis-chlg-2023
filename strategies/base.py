@@ -73,7 +73,7 @@ class BaseStrategy(SupervisedTemplate):
         hat_reg_base_factor: float,
         hat_reg_decay_exp: float,
         hat_reg_enrich_ratio: float,
-        num_replay_samples_per_batch: int,
+        # num_replay_samples_per_batch: int,
         device: torch.device,
         plugins: Optional[List[SupervisedPlugin]] = None,
         verbose: bool = True,
@@ -100,13 +100,13 @@ class BaseStrategy(SupervisedTemplate):
         self.hat_reg_enrich_ratio = hat_reg_enrich_ratio
         self.hat_reg_factor = None
 
-        self.replay = num_replay_samples_per_batch > 0
-        self.replay_features = {}
-        self.replay_feature_tensor = None
-        self.replay_target_tensor = None
-        self.replay_logit_tensor = None
-        self.num_replay_samples_per_class = 2
-        self.num_replay_samples_per_batch = num_replay_samples_per_batch
+        # self.replay = num_replay_samples_per_batch > 0
+        # self.replay_features = {}
+        # self.replay_feature_tensor = None
+        # self.replay_target_tensor = None
+        # self.replay_logit_tensor = None
+        # self.num_replay_samples_per_class = 2
+        # self.num_replay_samples_per_batch = num_replay_samples_per_batch
 
     @staticmethod
     @abstractmethod
@@ -126,33 +126,33 @@ class BaseStrategy(SupervisedTemplate):
             self.mbatch[2],
         )
 
-    def _del_replay_features(self, classes: List[int]):
-        for __c in classes:
-            if __c in self.replay_features:
-                del self.replay_features[__c]
+    # def _del_replay_features(self, classes: List[int]):
+    #     for __c in classes:
+    #         if __c in self.replay_features:
+    #             del self.replay_features[__c]
 
-    @torch.no_grad()
-    def _construct_replay_tensors(self, target: Optional[int] = None):
-        # Construct replay feature and target tensors
-        if not self.replay or len(self.replay_features) == 0:
-            return
-
-        __logits, __targets = [], []
-        for __c, (__mean, __std) in self.replay_features.items():
-            # Shape of the logits are [num_samples, num_features]
-            for __i in range(__mean.shape[0]):
-                __l = [
-                    torch.normal(__mean[__i], __std[__i]).to(self.device)
-                    for _ in range(self.train_mb_size * 2)
-                ]
-                __l = torch.stack(__l, dim=0)
-                __logits.append(__l)
-                __targets += [__c if target is None else target] * len(__l)
-        self.replay_feature_tensor = torch.cat(__logits, dim=0)
-        self.replay_target_tensor = torch.tensor(__targets, device=self.device)
-
-        # Construct replay logits
-        self.replay_logit_tensor = self.model.linear(self.replay_feature_tensor)
+    # @torch.no_grad()
+    # def _construct_replay_tensors(self, target: Optional[int] = None):
+    #     # Construct replay feature and target tensors
+    #     if not self.replay or len(self.replay_features) == 0:
+    #         return
+    #
+    #     __logits, __targets = [], []
+    #     for __c, (__mean, __std) in self.replay_features.items():
+    #         # Shape of the logits are [num_samples, num_features]
+    #         for __i in range(__mean.shape[0]):
+    #             __l = [
+    #                 torch.normal(__mean[__i], __std[__i]).to(self.device)
+    #                 for _ in range(self.train_mb_size * 2)
+    #             ]
+    #             __l = torch.stack(__l, dim=0)
+    #             __logits.append(__l)
+    #             __targets += [__c if target is None else target] * len(__l)
+    #     self.replay_feature_tensor = torch.cat(__logits, dim=0)
+    #     self.replay_target_tensor = torch.tensor(__targets, device=self.device)
+    #
+    #     # Construct replay logits
+    #     self.replay_logit_tensor = self.model.linear(self.replay_feature_tensor)
 
     def train_dataset_adaptation(self, **kwargs):
         super().train_dataset_adaptation()
@@ -240,33 +240,33 @@ class BaseStrategy(SupervisedTemplate):
                 f"{self.hat_reg_factor:.2f} "
             )
 
-    def _get_replay_samples(self):
-        if (not self.replay) or (self.replay_feature_tensor is None):
-            return None, None, None
-        elif (
-            self.num_replay_samples_per_batch
-            >= self.replay_feature_tensor.shape[0]
-        ):
-            return (
-                self.replay_feature_tensor,
-                self.replay_target_tensor,
-                self.replay_logit_tensor,
-            )
-        else:
-            _indices = torch.randperm(
-                self.replay_feature_tensor.shape[0],
-                device=self.device,
-            )[: self.num_replay_samples_per_batch]
-            return (
-                self.replay_feature_tensor[_indices],
-                self.replay_target_tensor[_indices],
-                self.replay_logit_tensor[_indices],
-            )
+    # def _get_replay_samples(self):
+    #     if (not self.replay) or (self.replay_feature_tensor is None):
+    #         return None, None, None
+    #     elif (
+    #         self.num_replay_samples_per_batch
+    #         >= self.replay_feature_tensor.shape[0]
+    #     ):
+    #         return (
+    #             self.replay_feature_tensor,
+    #             self.replay_target_tensor,
+    #             self.replay_logit_tensor,
+    #         )
+    #     else:
+    #         _indices = torch.randperm(
+    #             self.replay_feature_tensor.shape[0],
+    #             device=self.device,
+    #         )[: self.num_replay_samples_per_batch]
+    #         return (
+    #             self.replay_feature_tensor[_indices],
+    #             self.replay_target_tensor[_indices],
+    #             self.replay_logit_tensor[_indices],
+    #         )
 
-    def sync_replay_features(self, strategy):
-        if not self.replay or not strategy.replay:
-            return
-        self.replay_features = strategy.replay_features
+    # def sync_replay_features(self, strategy):
+    #     if not self.replay or not strategy.replay:
+    #         return
+    #     self.replay_features = strategy.replay_features
 
     def forward_(
         self,

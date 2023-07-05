@@ -139,20 +139,20 @@ if __name__ == "__main__":
         help="Base factor for the HAT regularization term for the "
         "representation learning phase.",
     )
-    parser.add_argument(
-        "--rep_num_replay_samples_per_batch",
-        type=int,
-        default=0,
-        help="Number of replay samples per batch for the representation "
-        "learning phase.",
-    )
-    parser.add_argument(
-        "--rep_proj_div_factor",
-        type=float,
-        default=1.0,
-        help="The divergent factor for the embedding before the projected "
-             "output of the samples and the replay embeddings."
-    )
+    # parser.add_argument(
+    #     "--rep_num_replay_samples_per_batch",
+    #     type=int,
+    #     default=0,
+    #     help="Number of replay samples per batch for the representation "
+    #     "learning phase.",
+    # )
+    # parser.add_argument(
+    #     "--rep_proj_div_factor",
+    #     type=float,
+    #     default=1.0,
+    #     help="The divergent factor for the embedding before the projected "
+    #          "output of the samples and the replay embeddings."
+    # )
     parser.add_argument(
         "--rep_proj_head_dim",
         type=int,
@@ -185,27 +185,27 @@ if __name__ == "__main__":
         help="Base factor for the HAT regularization term for the "
         "classification learning phase.",
     )
-    parser.add_argument(
-        "--clf_num_replay_samples_per_batch",
-        type=int,
-        default=0,
-        help="Number of replay samples per batch for the classification "
-        "learning phase.",
-    )
-    parser.add_argument(
-        "--clf_logit_reg_factor",
-        type=float,
-        default=0.0,
-        help="Regularization factor for replay logits during the "
-             "classification learning phase.",
-    )
-    parser.add_argument(
-        "--clf_logit_reg_degree",
-        type=float,
-        default=1.0,
-        help="Degree of the regularization factor for replay logits "
-             "during the classification learning phase.",
-    )
+    # parser.add_argument(
+    #     "--clf_num_replay_samples_per_batch",
+    #     type=int,
+    #     default=0,
+    #     help="Number of replay samples per batch for the classification "
+    #     "learning phase.",
+    # )
+    # parser.add_argument(
+    #     "--clf_logit_reg_factor",
+    #     type=float,
+    #     default=0.0,
+    #     help="Regularization factor for replay logits during the "
+    #          "classification learning phase.",
+    # )
+    # parser.add_argument(
+    #     "--clf_logit_reg_degree",
+    #     type=float,
+    #     default=1.0,
+    #     help="Degree of the regularization factor for replay logits "
+    #          "during the classification learning phase.",
+    # )
     parser.add_argument(
         "--clf_freeze_backbone",
         action="store_true",
@@ -279,11 +279,11 @@ if __name__ == "__main__":
     num_classes = benchmark.n_classes
     # Need an extra class for "out-of-experience" samples if we use replay
     # and train only the logits of the current experience
-    if (
-        args.clf_num_replay_samples_per_batch > 0
-        and args.clf_train_exp_logits_only
-    ):
-        num_classes += 1
+    # if (
+    #     args.clf_num_replay_samples_per_batch > 0
+    #     and args.clf_train_exp_logits_only
+    # ):
+    #     num_classes += 1
     if args.hat:
         hat_config = HATConfig(
             num_tasks=benchmark.n_experiences,
@@ -345,8 +345,8 @@ if __name__ == "__main__":
         hat_reg_base_factor=args.rep_hat_reg_base_factor,
         hat_reg_decay_exp=args.hat_reg_decay_exp,
         hat_reg_enrich_ratio=args.hat_reg_enrich_ratio,
-        num_replay_samples_per_batch=args.rep_num_replay_samples_per_batch,
-        proj_div_factor=args.rep_proj_div_factor,
+        # num_replay_samples_per_batch=args.rep_num_replay_samples_per_batch,
+        # proj_div_factor=args.rep_proj_div_factor,
         device=device,
         proj_head_dim=args.rep_proj_head_dim,
         plugins=[*competition_plugins],
@@ -367,9 +367,9 @@ if __name__ == "__main__":
         hat_reg_base_factor=args.clf_hat_reg_base_factor,
         hat_reg_decay_exp=args.hat_reg_decay_exp,
         hat_reg_enrich_ratio=args.hat_reg_enrich_ratio,
-        num_replay_samples_per_batch=args.clf_num_replay_samples_per_batch,
-        logit_reg_factor=args.clf_logit_reg_factor,
-        logit_reg_degree=args.clf_logit_reg_degree,
+        # num_replay_samples_per_batch=args.clf_num_replay_samples_per_batch,
+        # logit_reg_factor=args.clf_logit_reg_factor,
+        # logit_reg_degree=args.clf_logit_reg_degree,
         device=device,
         train_epochs=args.clf_num_epochs,
         logit_calibr=args.clf_logit_calibr,
@@ -402,7 +402,7 @@ if __name__ == "__main__":
             experiences=__exp,
             num_workers=args.num_workers,
         )
-        rep.sync_replay_features(clf)
+        # rep.sync_replay_features(clf)
 
     print(
         f"Training done in {competition_plugins[0].time_spent:.2f} minutes."

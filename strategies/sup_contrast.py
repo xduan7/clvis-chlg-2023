@@ -141,8 +141,8 @@ class SupContrast(BaseStrategy):
         hat_reg_base_factor: float,
         hat_reg_decay_exp: float,
         hat_reg_enrich_ratio: float,
-        num_replay_samples_per_batch: int,
-        proj_div_factor: float,
+        # num_replay_samples_per_batch: int,
+        # proj_div_factor: float,
         device: torch.device,
         proj_head_dim: int,
         plugins: Optional[List[SupervisedPlugin]] = None,
@@ -157,12 +157,12 @@ class SupContrast(BaseStrategy):
             hat_reg_base_factor=hat_reg_base_factor,
             hat_reg_decay_exp=hat_reg_decay_exp,
             hat_reg_enrich_ratio=hat_reg_enrich_ratio,
-            num_replay_samples_per_batch=num_replay_samples_per_batch,
+            # num_replay_samples_per_batch=num_replay_samples_per_batch,
             device=device,
             plugins=plugins,
             verbose=verbose,
         )
-        self.proj_div_factor = proj_div_factor
+        # self.proj_div_factor = proj_div_factor
         self.proj_head_dim = proj_head_dim
 
     # TODO: rotated head
@@ -227,30 +227,30 @@ class SupContrast(BaseStrategy):
     #     self.replay_feature_tensor = torch.stack(__logits)
     #     self.replay_target_tensor = torch.tensor(__targets, device=self.device)
 
-    def _get_replay_samples(self):
-        if (not self.replay) or (self.replay_feature_tensor is None):
-            return None, None
-        elif (
-            self.num_replay_samples_per_batch
-            >= self.replay_feature_tensor.shape[0]
-        ):
-            return (
-                self.replay_feature_tensor,
-                self.replay_target_tensor,
-            )
-        else:
-            _indices = torch.randperm(
-                self.replay_feature_tensor.shape[0],
-                device=self.device,
-            )[: self.num_replay_samples_per_batch]
-            return (
-                self.replay_feature_tensor[_indices],
-                self.replay_target_tensor[_indices],
-            )
+    # def _get_replay_samples(self):
+    #     if (not self.replay) or (self.replay_feature_tensor is None):
+    #         return None, None
+    #     elif (
+    #         self.num_replay_samples_per_batch
+    #         >= self.replay_feature_tensor.shape[0]
+    #     ):
+    #         return (
+    #             self.replay_feature_tensor,
+    #             self.replay_target_tensor,
+    #         )
+    #     else:
+    #         _indices = torch.randperm(
+    #             self.replay_feature_tensor.shape[0],
+    #             device=self.device,
+    #         )[: self.num_replay_samples_per_batch]
+    #         return (
+    #             self.replay_feature_tensor[_indices],
+    #             self.replay_target_tensor[_indices],
+    #         )
 
     def model_adaptation(self, model=None):
-        self._del_replay_features(self.experience.classes_in_this_experience)
-        self._construct_replay_tensors()
+        # self._del_replay_features(self.experience.classes_in_this_experience)
+        # self._construct_replay_tensors()
 
         _base_model = super().model_adaptation(model=model)
         _proj_head = nn.Linear(
@@ -283,20 +283,20 @@ class SupContrast(BaseStrategy):
                 mb_it=mb_it,
                 return_features=True,
             )
-            __replay_features, __replay_targets = self._get_replay_samples()
-            if __replay_features is not None:
-                __replay_features = __replay_features.reshape(-1, 160)
-                # _features = torch.cat([_features, __replay_features], dim=0)
-                # self.mbatch = (
-                #     self.mbatch[0],
-                #     torch.cat([self.mb_y, __replay_targets], dim=0),
-                #     self.mbatch[2],
-                # )
-                _sim = torch.matmul(
-                    nn.functional.normalize(_features, dim=-1, eps=1e-8),
-                    nn.functional.normalize(__replay_features, dim=-1, eps=1e-8).t()
-                ).mean()
-                self.loss = self.proj_div_factor * _sim
+            # __replay_features, __replay_targets = self._get_replay_samples()
+            # if __replay_features is not None:
+            #     __replay_features = __replay_features.reshape(-1, 160)
+            #     # _features = torch.cat([_features, __replay_features], dim=0)
+            #     # self.mbatch = (
+            #     #     self.mbatch[0],
+            #     #     torch.cat([self.mb_y, __replay_targets], dim=0),
+            #     #     self.mbatch[2],
+            #     # )
+            #     _sim = torch.matmul(
+            #         nn.functional.normalize(_features, dim=-1, eps=1e-8),
+            #         nn.functional.normalize(__replay_features, dim=-1, eps=1e-8).t()
+            #     ).mean()
+            #     self.loss = self.proj_div_factor * _sim
             _proj = self.model.proj_head(_features)
             # Reshape from [2*bsz, proj_head_dim] to [bsz, 2, proj_head_dim]
             _proj = _proj.view(2, len(self.mb_y), -1).swapaxes(0, 1)
